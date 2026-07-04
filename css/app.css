@@ -61,6 +61,8 @@
 .card .ch .r{margin-left:auto;font-size:11.5px;color:var(--faint);font-weight:600}
 .card .cb{padding:14px 16px}
 #map,#wardmap,#streetmap,#fleetmap{width:100%;height:460px;background:#e8eef3}
+#map .leaflet-control-container,#wardmap .leaflet-control-container,
+#streetmap .leaflet-control-container,#fleetmap .leaflet-control-container{z-index:10}
 .mini{height:300px}
 
 /* legend */
@@ -113,6 +115,22 @@ tr.clk{cursor:pointer} tr.clk:hover td{background:#fafbfc}
 .tl li.miss::before{background:var(--faint)}
 .tl li .w{color:var(--faint)}
 .drawer .df{margin-top:auto;padding:14px 20px;border-top:1px solid var(--line);display:flex;gap:10px}
+
+/* crew modal */
+.cmodal{position:fixed;top:50%;left:50%;width:680px;max-width:94vw;max-height:80vh;background:#fff;
+  border-radius:14px;box-shadow:0 20px 60px rgba(20,24,31,.25);transform:translate(-50%,-46%);
+  opacity:0;pointer-events:none;transition:.18s;z-index:902;display:flex;flex-direction:column}
+.cmodal.on{opacity:1;pointer-events:auto;transform:translate(-50%,-50%)}
+.cmodal .mh{padding:16px 20px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;flex:0 0 auto}
+.cmodal .mh .x{margin-left:auto;cursor:pointer;color:var(--faint);font-size:20px;line-height:1;border:none;background:none}
+.cmodal .mb{overflow-y:auto;padding:2px 0 10px}
+.cmodal .mf{padding:14px 20px;border-top:1px solid var(--line);display:flex;gap:10px;flex:0 0 auto}
+.field{margin-bottom:14px}
+.field label{display:block;font-size:11px;font-weight:700;color:var(--faint);text-transform:uppercase;letter-spacing:.3px;margin-bottom:6px}
+.field input[type=text],.field select{width:100%;font:inherit;font-size:13.5px;padding:9px 11px;
+  border:1px solid var(--line2);border-radius:9px;background:#fff;color:var(--ink)}
+.field input[type=text]:focus,.field select:focus{outline:none;border-color:var(--chalo)}
+.btn.danger{color:var(--pothole);border-color:var(--pothole)}.btn.danger:hover{background:var(--bad-bg)}
 
 /* fleet + replay */
 .replaywrap{display:grid;grid-template-columns:1fr;gap:0}
