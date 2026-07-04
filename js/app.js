@@ -42,11 +42,6 @@ function crewLoad(){
     return {...c, total:mine.length, open:mine.filter(i=>OPEN.has(i.status)).length};
   });
 }
-function nextCrewId(){
-  const used=new Set(CREW.map(c=>c.id)); let n=1;
-  while(used.has('CR-'+String(n).padStart(2,'0')))n++;
-  return 'CR-'+String(n).padStart(2,'0');
-}
 function removeCrew(id){
   const idx=CREW.findIndex(c=>c.id===id); if(idx<0)return;
   const removed=CREW[idx];
@@ -106,6 +101,8 @@ function counts(){
   document.getElementById('ct-bus').textContent=DATA.buses.length;
   document.getElementById('ct-crew').textContent=CREW.length;
   document.getElementById('ct-performance').textContent=issues.filter(i=>i.type!=='waterlogging'&&OPEN.has(i.status)&&daysOpen(i)>7).length;
+  const session=getSession(), cm=session&&session.role==='crew'?crewById(session.crewId):null;
+  document.getElementById('ct-mywork').textContent=cm?crewOpenCount(cm.id):'';
   Object.keys(TYPE).forEach(t=>{const e=document.getElementById('ct-'+t); if(e)e.textContent=open.filter(i=>i.type===t).length;});
   document.getElementById('sensing-n').textContent=DATA.buses.length+' buses sensing';
   const passes=issues.reduce((a,i)=>a+i.passes,0);
@@ -150,7 +147,7 @@ function render(){
   if(session && session.role==='ward_officer' && state.view==='ward'){ state.ward=session.ward; }
   setActive(); counts();
   const c=document.getElementById('content'); c.innerHTML='';
-  ({city:viewCity,wards:viewWards,ward:viewWard,street:viewStreet,fleet:viewFleet,cat:viewCat,crew:viewCrew,performance:viewPerformance})[state.view]();
+  ({city:viewCity,wards:viewWards,ward:viewWard,street:viewStreet,fleet:viewFleet,cat:viewCat,crew:viewCrew,performance:viewPerformance,mywork:viewMyWork})[state.view]();
 }
 
 function kpiStrip(list){
@@ -247,7 +244,7 @@ function qItem(i,opts={}){
     <div class="meta"><div class="t1">${TYPE[i.type].label}
       <span class="sev" style="background:${SEVC[i.severity]}">SEV ${i.severity}</span>
       <span class="badge ${i.status}">${i.status.replace('_',' ')}</span>
-      ${i.type!=='waterlogging'?`<span class="badge ${i.crew?'assigned':'unassigned'}">${i.crew?'Assigned':'Unassigned'}</span>`:''}</div>
+      ${(i.type!=='waterlogging'&&getSession()?.role!=='crew')?`<span class="badge ${i.crew?'assigned':'unassigned'}">${i.crew?'Assigned':'Unassigned'}</span>`:''}</div>
       <div class="t2">${i.street} · ${i.id} · ${i.passes} passes · ${Math.round(i.confidence*100)}% conf</div></div>
     <div class="pri">P ${priority(i).toFixed(1)}</div>`;
   el.onclick=()=>openIssue(i.id,opts); return el;
@@ -352,10 +349,11 @@ function viewCrew(){
   const c=document.getElementById('content');
   c.innerHTML=`<div class="card"><div class="ch"><h3>Crew roster</h3><span class="r">${CREW.length} members · click a member to see their worklist</span>
       ${canManage?'<button class="btn primary sm" id="addCrewBtn">+ Add crew member</button>':''}</div>
-    <table><thead><tr><th></th><th>Crew ID</th><th>Name</th><th>Specialism</th><th>Assigned</th><th>Completed</th><th></th></tr></thead><tbody>
+    <table><thead><tr><th></th><th>Crew ID</th><th>Name</th><th>Specialism</th><th>Ward</th><th>Assigned</th><th>Completed</th><th></th></tr></thead><tbody>
     ${rows.map((cm,i)=>`<tr class="clk" data-crew="${cm.id}"><td class="rank">${i+1}</td>
       <td><b>${cm.id}</b></td><td>${cm.name}</td>
       <td><span class="tdot" style="background:${TYPE[cm.type].c};display:inline-block;margin-right:6px;vertical-align:middle"></span>${TYPE[cm.type].label}</td>
+      <td>${cm.ward?'Ward '+cm.ward:'—'}</td>
       <td><span class="scorepill" style="background:${cm.open>=CREW_CAPACITY?'#d32f2f':cm.open?'#e56a00':'#2e7d32'}">${cm.open}/${CREW_CAPACITY}</span>${cm.open>=CREW_CAPACITY?' <span class="badge confirmed" style="margin-left:6px">full</span>':''}</td>
       <td>${cm.total-cm.open}</td>
       <td>${canManage?`<button class="btn sm danger" data-remove="${cm.id}">Remove</button>`:''}</td></tr>`).join('')}
@@ -386,12 +384,39 @@ function openCrew(id){
       ${done.length?`<div class="section-t" style="margin:18px 16px 6px">Completed — ${done.length}</div><div id="crewDone"></div>`:''}
     </div>`;
   const q=m.querySelector('#crewQueue');
-  if(!open.length) q.innerHTML='<div class="hint">No open tasks — worklist clear.</div>';
+  if(!open.length) q.innerHTML='<div class="hint">No issue assigned.</div>';
   open.forEach(i=>q.appendChild(qItem(i,{hideAssign:true})));
   const dq=m.querySelector('#crewDone');
   if(dq) done.forEach(i=>dq.appendChild(qItem(i,{hideAssign:true})));
   document.getElementById('cx').onclick=closeDrawer; s.onclick=closeDrawer;
   s.classList.add('on'); m.classList.add('on');
+}
+function viewMyWork(){
+  state.ward=state.street=state.type=null;
+  const session=getSession();
+  const cm=session&&crewById(session.crewId);
+  document.getElementById('h-title').textContent='My work';
+  crumb([{t:'My work'}]);
+  const c=document.getElementById('content');
+  if(!cm){
+    document.getElementById('h-sub').textContent='Your account isn\'t linked to a crew record.';
+    c.innerHTML='<div class="card cb"><div class="hint" style="padding:4px">No matching crew record — ask an admin to check your account.</div></div>';
+    return;
+  }
+  document.getElementById('h-sub').textContent=`${cm.name} · ${TYPE[cm.type].label} specialist${cm.ward?' · Ward '+cm.ward:''} · your resolution queue and history.`;
+  const mine=issues.filter(i=>i.crew===cm.id);
+  const open=mine.filter(i=>OPEN.has(i.status)).sort((a,b)=>priority(b)-priority(a));
+  const done=mine.filter(i=>!OPEN.has(i.status));
+  c.innerHTML=`<div class="card"><div class="ch"><h3>${cm.name}</h3><span class="r">${cm.id} · ${TYPE[cm.type].label} specialist${cm.ward?' · Ward '+cm.ward:''}</span></div>
+    <div class="section-t" style="margin:14px 16px 6px">Assigned to you — ${open.length}/${CREW_CAPACITY} open${open.length>=CREW_CAPACITY?' <span class="badge confirmed" style="text-transform:none;letter-spacing:0">worklist full</span>':''}</div>
+    <div id="myQueue"></div>
+    ${done.length?`<div class="section-t" style="margin:18px 16px 6px">Completed — ${done.length}</div><div id="myDone"></div>`:''}
+  </div>`;
+  const q=c.querySelector('#myQueue');
+  if(!open.length) q.innerHTML='<div class="hint">No issue assigned.</div>';
+  open.forEach(i=>q.appendChild(qItem(i,{hideAssign:true})));
+  const dq=c.querySelector('#myDone');
+  if(dq) done.forEach(i=>dq.appendChild(qItem(i,{hideAssign:true})));
 }
 function openAddCrew(){
   const id=nextCrewId();
@@ -599,8 +624,31 @@ function afterAction(i){ // recompute scores + refresh underlying view, keep dra
 }
 function closeDrawer(){document.getElementById('drawer').classList.remove('on');document.getElementById('crewModal').classList.remove('on');document.getElementById('scrim').classList.remove('on');}
 
+const EVIDENCE_PHOTOS={
+  pothole:[
+    'https://res.cloudinary.com/dk1uns1nz/image/upload/v1783174326/AI_lu8g4o.png',
+    'https://res.cloudinary.com/dk1uns1nz/image/upload/v1783174325/pothhole-detection-500x500_n3moul.webp'
+  ],
+  garbage_pile:[
+    'https://res.cloudinary.com/dk1uns1nz/image/upload/v1783175036/images_3_garjvs.jpg',
+    'https://res.cloudinary.com/dk1uns1nz/image/upload/v1783175036/images_2_btrf63.jpg'
+  ]
+};
+function pickEvidencePhoto(type,id){    // deterministic per issue — same photo on every view, not reshuffled each render
+  const photos=EVIDENCE_PHOTOS[type]; if(!photos) return null;
+  let hash=0; for(const ch of id) hash=(hash*31+ch.charCodeAt(0))>>>0;
+  return photos[hash%photos.length];
+}
 function evidenceSVG(i){
   const c=TYPE[i.type].c;
+  const photo=pickEvidencePhoto(i.type,i.id);
+  if(photo){
+    return `<div style="position:relative;width:100%;height:100%">
+      <img src="${photo}" alt="${TYPE[i.type].label} evidence" style="width:100%;height:100%;object-fit:cover;display:block">
+      <span style="position:absolute;left:10px;top:10px;background:${c};color:#fff;font-size:10px;font-weight:700;padding:3px 8px;border-radius:3px;font-family:'Noto Sans',sans-serif">${TYPE[i.type].label} ${Math.round(i.confidence*100)}%</span>
+      <span style="position:absolute;left:10px;bottom:8px;color:#fff;font-size:9px;font-family:'Noto Sans',sans-serif;text-shadow:0 1px 2px rgba(0,0,0,.8)">dashcam frame · ${i.id}</span>
+    </div>`;
+  }
   return `<svg viewBox="0 0 320 200" width="100%" height="100%" style="display:block">
     <rect width="320" height="200" fill="#2b2f36"/>
     <polygon points="0,200 130,96 190,96 320,200" fill="#3a3f47"/>
@@ -640,7 +688,8 @@ function applyRoleUI(session){
   chip.innerHTML=`<span class="rolebadge role-${session.role}">${session.role.replace('_',' ')}</span>
     <b>${session.username}</b><button class="btn sm" id="logoutBtn">Log out</button>`;
   document.getElementById('logoutBtn').onclick=logout;
-  document.body.classList.remove('role-admin','role-ward_officer','role-user');
+  document.body.classList.remove('role-admin','role-ward_officer','role-user','role-crew');
   document.body.classList.add('role-'+session.role);
   if(session.role==='ward_officer'){ state.view='ward'; state.ward=session.ward; }
+  if(session.role==='crew'){ state.view='mywork'; }
 }

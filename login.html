@@ -33,9 +33,17 @@
           <option value="admin">Admin</option>
           <option value="ward_officer">Ward Officer</option>
           <option value="user">User</option>
+          <option value="crew">Crew member</option>
         </select>
       </div>
-      <div class="field" id="su-wardfield" style="display:none"><label for="su-ward">Assigned ward</label><select id="su-ward"></select></div>
+      <div class="field" id="su-wardfield" style="display:none"><label for="su-ward">Ward</label><select id="su-ward"></select></div>
+      <div class="field" id="su-specialismfield" style="display:none"><label for="su-specialism">Specialism</label>
+        <select id="su-specialism">
+          <option value="pothole">Pothole</option>
+          <option value="garbage_pile">Garbage / Sanitation</option>
+          <option value="street_obstruction">Street obstruction</option>
+        </select>
+      </div>
       <div class="autherr" id="su-err"></div>
       <button class="btn primary" type="submit" style="width:100%">Create account</button>
     </form>

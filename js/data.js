@@ -12,3 +12,23 @@ const CREW = [
   {id:'CR-08', name:'Deepak Salunkhe', type:'street_obstruction'}
 ];
 const CREW_CAPACITY=10;                  // a crew member can carry at most this many OPEN tasks at once
+const CREW_TYPES=['pothole','garbage_pile','street_obstruction']; // specialisms a crew member can hold — no waterlogging crew
+function nextCrewId(){
+  const used=new Set(CREW.map(c=>c.id)); let n=1;
+  while(used.has('CR-'+String(n).padStart(2,'0')))n++;
+  return 'CR-'+String(n).padStart(2,'0');
+}
+const CREW_EXTRA_KEY='citylens_crew_extra_v1';   // crew members created via signup, kept outside the static seed so they survive the login → dashboard navigation
+(function hydrateCrewExtra(){
+  try{
+    const extra=JSON.parse(localStorage.getItem(CREW_EXTRA_KEY))||[];
+    extra.forEach(c=>{ if(!CREW.some(x=>x.id===c.id)) CREW.push(c); });
+  }catch{}
+})();
+function saveCrewExtra(member){
+  try{
+    const extra=JSON.parse(localStorage.getItem(CREW_EXTRA_KEY))||[];
+    extra.push(member);
+    localStorage.setItem(CREW_EXTRA_KEY, JSON.stringify(extra));
+  }catch{}
+}

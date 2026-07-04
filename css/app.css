@@ -63,6 +63,8 @@
 #map,#wardmap,#streetmap,#fleetmap{width:100%;height:460px;background:#e8eef3}
 #map .leaflet-control-container,#wardmap .leaflet-control-container,
 #streetmap .leaflet-control-container,#fleetmap .leaflet-control-container{z-index:10}
+#map .leaflet-top,#map .leaflet-bottom,#wardmap .leaflet-top,#wardmap .leaflet-bottom,
+#streetmap .leaflet-top,#streetmap .leaflet-bottom,#fleetmap .leaflet-top,#fleetmap .leaflet-bottom{z-index:10}
 .mini{height:300px}
 
 /* legend */
@@ -157,8 +159,15 @@ tr.clk{cursor:pointer} tr.clk:hover td{background:#fafbfc}
 .rolebadge.role-admin{background:var(--chalo)}
 .rolebadge.role-ward_officer{background:#3b6fc4}
 .rolebadge.role-user{background:#6b7280}
+.rolebadge.role-crew{background:#7c5cbf}
 body.role-ward_officer #nav-spatial a{display:none}
 body.role-ward_officer #nav-spatial a#nav-myward{display:flex}
 body.role-ward_officer #nav-spatial a[data-view="street"]{display:flex}
 body.role-ward_officer #navgroup-cat{display:none}
+#nav-mywork{display:none}
+body.role-crew #nav-mywork{display:flex}
+body.role-crew #navgroup-spatial,
+body.role-crew #navgroup-cat{display:none}
+body.role-crew #nav-crew a[data-view="crew"],
+body.role-crew #nav-crew a[data-view="performance"]{display:none}
 body.role-admin #nav-myward{display:none}

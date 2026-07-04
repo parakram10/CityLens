@@ -23,18 +23,26 @@ function findUser(handle){
   if(!h) return null;
   return loadUsers().find(u=>u.username.toLowerCase()===h.toLowerCase() || u.mobile===h);
 }
-async function signUp({username,mobile,password,role,ward}){
+async function signUp({username,mobile,password,role,ward,specialism}){
   username=(username||'').trim(); mobile=(mobile||'').trim();
   if(!/^[a-zA-Z0-9_.]{3,24}$/.test(username)) throw new Error('Username must be 3–24 characters (letters, numbers, _ or .).');
   if(!/^[0-9]{10}$/.test(mobile)) throw new Error('Enter a valid 10-digit mobile number.');
   if(!password || password.length<6) throw new Error('Password must be at least 6 characters.');
-  if(!['admin','ward_officer','user'].includes(role)) throw new Error('Select a valid role.');
+  if(!['admin','ward_officer','user','crew'].includes(role)) throw new Error('Select a valid role.');
   const users=loadUsers();
   if(users.some(u=>u.username.toLowerCase()===username.toLowerCase())) throw new Error('That username is already taken.');
   if(users.some(u=>u.mobile===mobile)) throw new Error('That mobile number is already registered.');
-  if(role==='ward_officer' && !WARD_CODES.includes(ward)) throw new Error('Select the ward you officer.');
+  if((role==='ward_officer'||role==='crew') && !WARD_CODES.includes(ward)) throw new Error('Select your ward.');
+  if(role==='crew' && !CREW_TYPES.includes(specialism)) throw new Error('Select your specialism.');
+  let crewId=null;
+  if(role==='crew'){
+    crewId=nextCrewId();
+    const member={id:crewId, name:username, type:specialism, ward};
+    CREW.push(member);       // joins the same roster admins manage
+    saveCrewExtra(member);   // persisted so it's still there once we land on the dashboard
+  }
   const passHash=await sha256Hex(password);
-  users.push({username,mobile,passHash,role,ward:role==='ward_officer'?ward:null,createdAt:new Date().toISOString()});
+  users.push({username,mobile,passHash,role,ward:(role==='ward_officer'||role==='crew')?ward:null,crewId,createdAt:new Date().toISOString()});
   saveUsers(users);
 }
 async function login(handle,password){
@@ -42,7 +50,7 @@ async function login(handle,password){
   if(!u) throw new Error('No account found with that username or mobile.');
   const passHash=await sha256Hex(password||'');
   if(passHash!==u.passHash) throw new Error('Incorrect password.');
-  const session={username:u.username,role:u.role,ward:u.ward};
+  const session={username:u.username,role:u.role,ward:u.ward,crewId:u.crewId||null};
   sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
   return session;
 }
