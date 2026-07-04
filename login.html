@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CityLens — Log in</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/auth.css">
+</head>
+<body>
+<div class="authwrap" id="authScreen">
+  <div class="authcard">
+    <div class="brand" style="border-bottom:none;padding:0 0 18px"><div class="mark"></div><div><b>CityLens</b><span>Mumbai · BMC</span></div></div>
+    <div class="tabs">
+      <button type="button" class="tab active" data-tab="login">Log in</button>
+      <button type="button" class="tab" data-tab="signup">Create account</button>
+    </div>
+    <form id="loginForm" class="authform">
+      <div class="field"><label for="li-user">Username or mobile</label><input type="text" id="li-user" autocomplete="username" required></div>
+      <div class="field"><label for="li-pass">Password</label><input type="password" id="li-pass" autocomplete="current-password" required></div>
+      <div class="autherr" id="li-err"></div>
+      <button class="btn primary" type="submit" style="width:100%">Log in</button>
+      <a class="authlink" id="gotoForgot">Forgot password?</a>
+    </form>
+    <form id="signupForm" class="authform" style="display:none">
+      <div class="field"><label for="su-user">Username</label><input type="text" id="su-user" autocomplete="username" required minlength="3" maxlength="24"></div>
+      <div class="field"><label for="su-mobile">Mobile number</label><input type="tel" id="su-mobile" autocomplete="tel" inputmode="numeric" pattern="[0-9]{10}" required placeholder="10-digit mobile"></div>
+      <div class="field"><label for="su-pass">Password</label><input type="password" id="su-pass" autocomplete="new-password" required minlength="6"></div>
+      <div class="field"><label for="su-pass2">Confirm password</label><input type="password" id="su-pass2" autocomplete="new-password" required minlength="6"></div>
+      <div class="field"><label for="su-role">Log in as</label>
+        <select id="su-role">
+          <option value="admin">Admin</option>
+          <option value="ward_officer">Ward Officer</option>
+          <option value="user">User</option>
+        </select>
+      </div>
+      <div class="field" id="su-wardfield" style="display:none"><label for="su-ward">Assigned ward</label><select id="su-ward"></select></div>
+      <div class="autherr" id="su-err"></div>
+      <button class="btn primary" type="submit" style="width:100%">Create account</button>
+    </form>
+    <form id="forgotForm" class="authform" style="display:none">
+      <div class="authhint">This is a static prototype with no SMS/email backend, so the reset code is shown on screen instead of being sent to your phone.</div>
+      <div class="field"><label for="fg-user">Username or mobile</label><input type="text" id="fg-user" required></div>
+      <button class="btn" type="button" id="fg-send" style="width:100%">Send reset code</button>
+      <div id="fg-codebox" style="display:none">
+        <div class="field"><label for="fg-code">Reset code</label><input type="text" id="fg-code" inputmode="numeric" required></div>
+        <div class="field"><label for="fg-newpass">New password</label><input type="password" id="fg-newpass" autocomplete="new-password" required minlength="6"></div>
+        <button class="btn primary" type="submit" style="width:100%">Reset password</button>
+      </div>
+      <div class="autherr" id="fg-err"></div>
+      <a class="authlink" id="backToLogin">Back to log in</a>
+    </form>
+  </div>
+</div>
+
+<script src="js/data.js"></script>
+<script src="js/auth.js"></script>
+<script src="js/login.js"></script>
+</body>
+</html>
