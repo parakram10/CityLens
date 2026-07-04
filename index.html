@@ -113,6 +113,8 @@ tr.clk{cursor:pointer} tr.clk:hover td{background:#fafbfc}
 .badge.candidate{background:#f0f1f4;color:var(--muted)}
 .badge.resolved{background:#eef0f3;color:var(--muted)}
 .badge.verified_fixed{background:var(--good-bg);color:var(--good)}
+.badge.assigned{background:var(--good-bg);color:var(--good)}
+.badge.unassigned{background:#f0f1f4;color:var(--faint)}
 .pri{margin-left:auto;text-align:right;font-size:11px;color:var(--faint);font-weight:700}
 
 /* buttons */
@@ -475,7 +477,8 @@ function qItem(i,opts={}){
   el.innerHTML=`<span class="tdot" style="background:${TYPE[i.type].c}"></span>
     <div class="meta"><div class="t1">${TYPE[i.type].label}
       <span class="sev" style="background:${SEVC[i.severity]}">SEV ${i.severity}</span>
-      <span class="badge ${i.status}">${i.status.replace('_',' ')}</span></div>
+      <span class="badge ${i.status}">${i.status.replace('_',' ')}</span>
+      <span class="badge ${i.crew?'assigned':'unassigned'}">${i.crew?'Assigned':'Unassigned'}</span></div>
       <div class="t2">${i.street} · ${i.id} · ${i.passes} passes · ${Math.round(i.confidence*100)}% conf</div></div>
     <div class="pri">P ${priority(i).toFixed(1)}</div>`;
   el.onclick=()=>openIssue(i.id,opts); return el;
@@ -725,9 +728,47 @@ function drawerActions(i){
     return;
   }
   df.innerHTML='<button class="btn primary" id="resolve">Mark resolved</button>'
-    +(issueCtx.hideAssign?'':'<button class="btn" id="assign">Assign crew</button>');
+    +(issueCtx.hideAssign
+      ? (i.crew?'<button class="btn danger" id="unassign">Unassign</button>':'')
+      : `<button class="btn ${i.crew?'good':''}" id="assign">${i.crew?'Assigned ✓':'Assign crew'}</button>`);
   df.querySelector('#resolve').onclick=()=>{i.status='resolved';i.last_seen=new Date().toISOString();afterAction(i);};
-  if(!issueCtx.hideAssign) df.querySelector('#assign').onclick=()=>{df.querySelector('#assign').textContent='Assigned ✓';df.querySelector('#assign').disabled=true;};
+  if(!issueCtx.hideAssign) df.querySelector('#assign').onclick=()=>openAssignCrew(i.id);
+  if(issueCtx.hideAssign&&i.crew){
+    const cid=i.crew;
+    df.querySelector('#unassign').onclick=()=>{
+      i.crew=null;
+      Object.assign(SCORES, wardScores());
+      closeDrawer(); openCrew(cid); render();
+    };
+  }
+}
+function openAssignCrew(id){
+  const i=issues.find(x=>x.id===id); if(!i)return;
+  const pool=CREW.filter(c=>c.type===i.type&&(i.crew===c.id||crewOpenCount(c.id)<CREW_CAPACITY));
+  const m=document.getElementById('crewModal'), s=document.getElementById('scrim');
+  const back=()=>{ m.classList.remove('on'); s.onclick=closeDrawer; };
+  m.innerHTML=`<div class="mh"><span class="tdot" style="background:${TYPE[i.type].c};width:14px;height:14px"></span>
+      <div><b style="font-size:15px">Assign crew</b>
+      <div style="font-size:12px;color:var(--faint)">${TYPE[i.type].label} specialists · ${i.id}</div></div>
+      <button class="x" id="cx">×</button></div>
+    <div class="mb" style="padding:6px 0">
+      ${pool.length?`<table><thead><tr><th>Crew ID</th><th>Name</th><th>Load</th><th></th></tr></thead><tbody>
+        ${pool.map(cm=>{
+          const open=crewOpenCount(cm.id);
+          const current=i.crew===cm.id;
+          return `<tr><td>${cm.id}</td><td>${cm.name}</td>
+            <td><span class="scorepill" style="background:${open>=CREW_CAPACITY?'#d32f2f':open?'#e56a00':'#2e7d32'}">${open}/${CREW_CAPACITY}</span></td>
+            <td><button class="btn ${current?'good':'primary'} sm" data-assign="${cm.id}">${current?'Assigned ✓':'Assign'}</button></td></tr>`;
+        }).join('')}
+      </tbody></table>`:`<div class="hint">All ${TYPE[i.type].label.toLowerCase()} specialists are at capacity — no one available right now.</div>`}
+    </div>`;
+  document.getElementById('cx').onclick=back; s.onclick=back;
+  m.querySelectorAll('button[data-assign]').forEach(btn=>btn.onclick=()=>{
+    i.crew=btn.dataset.assign;
+    s.onclick=closeDrawer; m.classList.remove('on');
+    afterAction(i);
+  });
+  m.classList.add('on');
 }
 function afterAction(i){ // recompute scores + refresh underlying view, keep drawer open
   Object.assign(SCORES, wardScores());
