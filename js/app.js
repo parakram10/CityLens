@@ -243,7 +243,7 @@ function qItem(i,opts={}){
     <div class="meta"><div class="t1">${TYPE[i.type].label}
       <span class="sev" style="background:${SEVC[i.severity]}">SEV ${i.severity}</span>
       <span class="badge ${i.status}">${i.status.replace('_',' ')}</span>
-      <span class="badge ${i.crew?'assigned':'unassigned'}">${i.crew?'Assigned':'Unassigned'}</span></div>
+      ${i.type!=='waterlogging'?`<span class="badge ${i.crew?'assigned':'unassigned'}">${i.crew?'Assigned':'Unassigned'}</span>`:''}</div>
       <div class="t2">${i.street} · ${i.id} · ${i.passes} passes · ${Math.round(i.confidence*100)}% conf</div></div>
     <div class="pri">P ${priority(i).toFixed(1)}</div>`;
   el.onclick=()=>openIssue(i.id,opts); return el;
@@ -354,7 +354,7 @@ function openAddCrew(){
     <div class="mb" style="padding:16px 20px">
       <div class="field"><label>Name</label><input type="text" id="ncName" placeholder="e.g. Rahul Verma"></div>
       <div class="field"><label>Specialism</label><select id="ncType">
-        ${Object.entries(TYPE).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join('')}
+        ${Object.entries(TYPE).filter(([k])=>k!=='waterlogging').map(([k,v])=>`<option value="${k}">${v.label}</option>`).join('')}
       </select></div>
       <div id="ncErr" style="color:var(--pothole);font-size:12px;min-height:16px"></div>
     </div>
@@ -473,7 +473,7 @@ function openIssue(id,opts){
         <dt>Route / bus</dt><dd>${i.route} · ${i.bus}</dd>
         <dt>First seen</dt><dd>${fmtDT(i.first_seen)}</dd>
         <dt>Independent passes</dt><dd>${i.passes} ${i.passes>=3?'✓ confirmed':'· awaiting gate'}</dd>
-        <dt>Assigned crew</dt><dd>${i.crew? crewById(i.crew).name+' · '+i.crew : 'Unassigned · backlog'}</dd>
+        ${i.type!=='waterlogging'?`<dt>Assigned crew</dt><dd>${i.crew? crewById(i.crew).name+' · '+i.crew : 'Unassigned · backlog'}</dd>`:''}
       </dl>
       <div class="section-t" style="margin-top:4px">Pass history</div>
       <ul class="tl">${hist.map(h=>`<li class="${h.detected?'':'miss'}"><b>${h.detected?'Detected':'Not detected'}</b>
@@ -487,6 +487,10 @@ function openIssue(id,opts){
 }
 function drawerActions(i){
   const df=document.getElementById('df');
+  if(i.type==='waterlogging'){
+    df.innerHTML='<div class="hint" style="padding:4px">Waterlogging clears with weather, not a repair crew — no assignment needed. Recurring flooding at this spot is flagged for drainage/disaster-management review.</div>';
+    return;
+  }
   const session=getSession();
   const canEdit=session && (session.role==='admin' || session.role==='ward_officer');
   if(!canEdit){ df.innerHTML='<div class="hint" style="padding:4px">Read-only access — sign in as an admin or ward officer to update this issue.</div>'; return; }

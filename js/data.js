@@ -8,8 +8,6 @@ const CREW = [
   {id:'CR-02', name:'Suresh Yadav',    type:'pothole'},
   {id:'CR-03', name:'Anita Kamble',    type:'garbage_pile'},
   {id:'CR-04', name:'Vikram Shinde',   type:'garbage_pile'},
-  {id:'CR-05', name:'Farhan Sheikh',   type:'waterlogging'},
-  {id:'CR-06', name:'Sunita More',     type:'waterlogging'},
   {id:'CR-07', name:'Prakash Jadhav',  type:'street_obstruction'},
   {id:'CR-08', name:'Deepak Salunkhe', type:'street_obstruction'}
 ];
