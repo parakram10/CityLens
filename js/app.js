@@ -8,8 +8,11 @@ const TYPE = {
 const SEVW = {1:1,2:2,3:3.5,4:5.5,5:8};
 const SEVC = {1:'#8a9099',2:'#3b6fc4',3:'#c98a12',4:'#e56a00',5:'#d32f2f'};
 const OPEN = new Set(['confirmed','reported','candidate']);
+const NOW = new Date(DATA.generated);       // fixed "now" for the demo — real Date() would drift from the seeded historical dates
 const fmtDate = s => new Date(s).toLocaleDateString('en-IN',{day:'numeric',month:'short'});
 const fmtDT = s => new Date(s).toLocaleString('en-IN',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});
+const daysOpen = i => Math.floor((NOW-new Date(i.first_seen))/864e5);
+const resolutionDays = i => Math.floor((new Date(i.last_seen)-new Date(i.first_seen))/864e5);
 const issues = DATA.issues;                 // mutable — resolve/verify write here
 const wardsFC = DATA.wards;
 
@@ -102,6 +105,7 @@ function counts(){
   document.getElementById('ct-city').textContent=open.length;
   document.getElementById('ct-bus').textContent=DATA.buses.length;
   document.getElementById('ct-crew').textContent=CREW.length;
+  document.getElementById('ct-performance').textContent=issues.filter(i=>i.type!=='waterlogging'&&OPEN.has(i.status)&&daysOpen(i)>7).length;
   Object.keys(TYPE).forEach(t=>{const e=document.getElementById('ct-'+t); if(e)e.textContent=open.filter(i=>i.type===t).length;});
   document.getElementById('sensing-n').textContent=DATA.buses.length+' buses sensing';
   const passes=issues.reduce((a,i)=>a+i.passes,0);
@@ -146,7 +150,7 @@ function render(){
   if(session && session.role==='ward_officer' && state.view==='ward'){ state.ward=session.ward; }
   setActive(); counts();
   const c=document.getElementById('content'); c.innerHTML='';
-  ({city:viewCity,wards:viewWards,ward:viewWard,street:viewStreet,fleet:viewFleet,cat:viewCat,crew:viewCrew})[state.view]();
+  ({city:viewCity,wards:viewWards,ward:viewWard,street:viewStreet,fleet:viewFleet,cat:viewCat,crew:viewCrew,performance:viewPerformance})[state.view]();
 }
 
 function kpiStrip(list){
@@ -277,6 +281,50 @@ function viewStreet(){
   c.querySelectorAll('tr[data-s]').forEach(tr=>tr.onclick=()=>{state.street=tr.dataset.s;render();});
 }
 
+function contractorName(i){ return i.crew?crewById(i.crew).name:'Unassigned'; }
+function crewPerformanceNote(i){          // per-issue callout — recognize fast fixes, flag stale backlog, say nothing in between
+  if(i.type==='waterlogging') return '';
+  if(i.status==='resolved'||i.status==='verified_fixed'){
+    const days=resolutionDays(i);
+    if(days<=3) return `<div class="hint" style="background:var(--good-bg);color:var(--good);border-radius:10px;padding:10px 14px;margin:14px 0;font-weight:700">🎉 Fixed in ${days<=0?'under a day':days+'d'} by ${contractorName(i)} — fast turnaround, nice work.</div>`;
+    return '';
+  }
+  if(OPEN.has(i.status) && daysOpen(i)>7){
+    return `<div class="hint" style="background:var(--bad-bg);color:var(--pothole);border-radius:10px;padding:10px 14px;margin:14px 0;font-weight:700">⏳ Open ${daysOpen(i)} days, unresolved — logged as a miss for ${contractorName(i)}.</div>`;
+  }
+  return '';
+}
+function viewPerformance(){
+  state.ward=state.street=state.type=null;
+  document.getElementById('h-title').textContent='Performance';
+  document.getElementById('h-sub').textContent='Fast fixes worth recognizing, and issues that have sat open too long — same confirmed-issue set, both sides of the story.';
+  crumb([{t:'Mumbai',go:()=>{state.view='city';render();}},{t:'Performance'}]);
+  const repairable=issues.filter(i=>i.type!=='waterlogging');
+  const praise=repairable.filter(i=>(i.status==='resolved'||i.status==='verified_fixed')&&resolutionDays(i)<=3)
+    .sort((a,b)=>resolutionDays(a)-resolutionDays(b));
+  const misses=repairable.filter(i=>OPEN.has(i.status)&&daysOpen(i)>7)
+    .sort((a,b)=>daysOpen(b)-daysOpen(a));
+  const c=document.getElementById('content');
+  c.innerHTML=`<div class="row" style="grid-template-columns:1fr 1fr">
+    <div class="card">
+      <div class="ch"><h3>🎉 Praise</h3><span class="r">${praise.length} fixed in ≤3 days</span></div>
+      ${praise.length?`<table><thead><tr><th>Location</th><th>Fixed in</th><th>Contractor</th></tr></thead><tbody>
+        ${praise.slice(0,25).map(i=>`<tr class="clk" data-open="${i.id}"><td><span class="tdot" style="background:${TYPE[i.type].c};margin-right:6px"></span>${i.street} · ${i.id}</td>
+          <td>${resolutionDays(i)<=0?'<1d':resolutionDays(i)+'d'}</td><td><span class="badge assigned">${contractorName(i)}</span></td></tr>`).join('')}
+        </tbody></table>${praise.length>25?`<div class="hint">+${praise.length-25} more fast fixes</div>`:''}`
+        :`<div class="cb"><div class="hint" style="padding:4px">No fast fixes yet on this run.</div></div>`}
+    </div>
+    <div class="card">
+      <div class="ch"><h3>⏳ Misses</h3><span class="r">${misses.length} open 7+ days</span></div>
+      ${misses.length?`<table><thead><tr><th>Location</th><th>Days open</th><th>Contractor</th></tr></thead><tbody>
+        ${misses.slice(0,25).map(i=>`<tr class="clk" data-open="${i.id}"><td><span class="tdot" style="background:${TYPE[i.type].c};margin-right:6px"></span>${i.street} · ${i.id}</td>
+          <td>${daysOpen(i)}d</td><td><span class="badge shame">${contractorName(i)}</span></td></tr>`).join('')}
+        </tbody></table>${misses.length>25?`<div class="hint">+${misses.length-25} more overdue</div>`:''}`
+        :`<div class="cb"><div class="hint" style="padding:4px">Nothing has gone unresolved for more than a week — clean sweep.</div></div>`}
+    </div>
+  </div>`;
+  c.querySelectorAll('tr[data-open]').forEach(tr=>tr.onclick=()=>openIssue(tr.dataset.open));
+}
 function viewCat(){
   const t=state.type; const list=issues.filter(i=>i.type===t);
   document.getElementById('h-title').textContent=TYPE[t].label+' — city-wide';
@@ -475,6 +523,7 @@ function openIssue(id,opts){
         <dt>Independent passes</dt><dd>${i.passes} ${i.passes>=3?'✓ confirmed':'· awaiting gate'}</dd>
         ${i.type!=='waterlogging'?`<dt>Assigned crew</dt><dd>${i.crew? crewById(i.crew).name+' · '+i.crew : 'Unassigned · backlog'}</dd>`:''}
       </dl>
+      ${crewPerformanceNote(i)}
       <div class="section-t" style="margin-top:4px">Pass history</div>
       <ul class="tl">${hist.map(h=>`<li class="${h.detected?'':'miss'}"><b>${h.detected?'Detected':'Not detected'}</b>
         <span class="w"> · ${fmtDT(h.t)} · ${h.bus}</span></li>`).join('')}</ul>
