@@ -21,6 +21,7 @@ const wardsFC = DATA.wards;
 (function assignCrew(){ // deterministic round-robin per category, respecting capacity — every issue gets a responsible crew member while room lasts
   const idx={}, openLoad={};
   issues.forEach(i=>{
+    if(i.type!=='waterlogging' && WARD_CREW[i.ward] && crewById(WARD_CREW[i.ward])){ i.crew=WARD_CREW[i.ward]; return; } // ward contractor takes the whole ward, any type
     const pool=CREW.filter(c=>c.type===i.type); if(!pool.length)return;
     idx[i.type]=idx[i.type]||0;
     const isOpen=OPEN.has(i.status);
@@ -41,6 +42,16 @@ function crewLoad(){
     const mine=issues.filter(i=>i.crew===c.id);
     return {...c, total:mine.length, open:mine.filter(i=>OPEN.has(i.status)).length};
   });
+}
+function assignWardToCrew(ward,crewId){ // hand the whole ward's repairable backlog to one contractor, any issue type
+  WARD_CREW[ward]=crewId;
+  saveWardCrew(WARD_CREW);
+  issues.forEach(i=>{ if(i.ward===ward && i.type!=='waterlogging') i.crew=crewId; });
+  Object.assign(SCORES, wardScores());
+}
+function unassignWardCrew(ward){
+  delete WARD_CREW[ward];
+  saveWardCrew(WARD_CREW);
 }
 function removeCrew(id){
   const idx=CREW.findIndex(c=>c.id===id); if(idx<0)return;
@@ -204,12 +215,14 @@ function viewWards(){
   crumb([{t:'Mumbai',go:()=>{state.view='city';render();}},{t:'Wards'}]);
   const board=Object.values(SCORES).sort((a,b)=>a.score-b.score);
   document.getElementById('content').innerHTML=`<div class="card"><div class="ch"><h3>All wards</h3><span class="r">click to open the ward officer view</span></div>
-    <table><thead><tr><th></th><th>Ward</th><th>Area</th><th>Health</th><th>Open</th><th>High sev</th><th>Fixed</th></tr></thead><tbody>
+    <table><thead><tr><th></th><th>Ward</th><th>Area</th><th>Health</th><th>Open</th><th>High sev</th><th>Fixed</th><th>Contractor</th></tr></thead><tbody>
     ${board.map((w,i)=>{const wi=issues.filter(x=>x.ward===w.ward);
       const hs=wi.filter(x=>OPEN.has(x.status)&&x.severity>=4).length; const fx=wi.filter(x=>x.status==='verified_fixed').length;
+      const contractor=WARD_CREW[w.ward]&&crewById(WARD_CREW[w.ward]);
       return `<tr class="clk" data-w="${w.ward}"><td class="rank">${i+1}</td><td><b>${w.ward}</b></td><td>${w.area}</td>
       <td><span class="scorepill" style="background:${scoreColor(w.score)}">${w.score}</span></td><td>${w.open}</td>
-      <td style="color:var(--pothole);font-weight:700">${hs}</td><td style="color:var(--good);font-weight:700">${fx}</td></tr>`;}).join('')}
+      <td style="color:var(--pothole);font-weight:700">${hs}</td><td style="color:var(--good);font-weight:700">${fx}</td>
+      <td>${contractor?contractor.name:'<span style="color:var(--faint)">—</span>'}</td></tr>`;}).join('')}
     </tbody></table></div>`;
   document.querySelectorAll('tr[data-w]').forEach(tr=>tr.onclick=()=>{state.ward=tr.dataset.w;state.view='ward';render();});
 }
@@ -223,7 +236,15 @@ function viewWard(){
   else crumb([{t:'Mumbai',go:()=>{state.view='city';render();}},{t:'Wards',go:()=>{state.view='wards';render();}},{t:'Ward '+w.ward}]);
   const open=list.filter(i=>OPEN.has(i.status)).sort((a,b)=>priority(b)-priority(a));
   const c=document.getElementById('content');
+  const contractorId=WARD_CREW[w.ward], contractor=contractorId&&crewById(contractorId);
+  const canManage=session && (session.role==='admin' || session.role==='ward_officer');
   c.innerHTML = kpiStrip(list) + `
+    <div class="card"><div class="ch"><h3>Ward contractor</h3><span class="r">one crew responsible for every repairable issue in Ward ${w.ward}</span></div>
+      <div class="cb" style="display:flex;align-items:center;gap:14px;padding:12px 16px">
+        ${contractor?`<span class="badge assigned">${contractor.name} · ${contractor.id}</span>`:'<span class="badge unassigned">No ward contractor</span>'}
+        ${canManage?`<button class="btn primary sm" id="wardAssignBtn">${contractor?'Change contractor':'Assign contractor'}</button>${contractor?'<button class="btn sm danger" id="wardUnassignBtn">Remove</button>':''}`:''}
+      </div>
+    </div>
     <div class="row map-side">
       <div class="card"><div class="ch"><h3>Resolution queue</h3><span class="r">${open.length} open · severity × persistence</span></div>
         <div style="max-height:452px;overflow-y:auto" id="queue"></div></div>
@@ -236,6 +257,35 @@ function viewWard(){
   L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',{subdomains:'abcd'}).addTo(wm);
   const wl=drawWards(wm,{only:state.ward}); wm.fitBounds(wl.getBounds(),{padding:[20,20]});
   plot(wm,list);
+  if(canManage){
+    document.getElementById('wardAssignBtn').onclick=()=>openAssignWardCrew(w.ward);
+    const ub=document.getElementById('wardUnassignBtn');
+    if(ub)ub.onclick=()=>{ if(confirm(`Remove ${contractor.name} as contractor for Ward ${w.ward}? Existing assignments stay as-is; new issues fall back to per-type assignment.`)){ unassignWardCrew(w.ward); render(); } };
+  }
+}
+function openAssignWardCrew(ward){
+  const w=SCORES[ward];
+  const m=document.getElementById('crewModal'), s=document.getElementById('scrim');
+  m.innerHTML=`<div class="mh"><div><b style="font-size:15px">Assign ward contractor</b>
+      <div style="font-size:12px;color:var(--faint)">Ward ${ward} · ${w.area} — every repairable issue in the ward goes to this crew</div></div>
+      <button class="x" id="cx">×</button></div>
+    <div class="mb" style="padding:6px 0">
+      <table><thead><tr><th>Crew ID</th><th>Name</th><th>Specialism</th><th>Open load</th><th></th></tr></thead><tbody>
+        ${CREW.map(cm=>{
+          const open=crewOpenCount(cm.id);
+          const current=WARD_CREW[ward]===cm.id;
+          return `<tr><td>${cm.id}</td><td>${cm.name}</td><td>${TYPE[cm.type].label}</td>
+            <td><span class="scorepill" style="background:${open>=CREW_CAPACITY?'#d32f2f':open?'#e56a00':'#2e7d32'}">${open}/${CREW_CAPACITY}</span></td>
+            <td><button class="btn ${current?'good':'primary'} sm" data-assign="${cm.id}">${current?'Assigned ✓':'Assign'}</button></td></tr>`;
+        }).join('')}
+      </tbody></table>
+    </div>`;
+  document.getElementById('cx').onclick=closeDrawer; s.onclick=closeDrawer;
+  m.querySelectorAll('button[data-assign]').forEach(btn=>btn.onclick=()=>{
+    assignWardToCrew(ward,btn.dataset.assign);
+    closeDrawer(); render();
+  });
+  m.classList.add('on');
 }
 
 function qItem(i,opts={}){
@@ -305,17 +355,17 @@ function viewPerformance(){
   c.innerHTML=`<div class="row" style="grid-template-columns:1fr 1fr">
     <div class="card">
       <div class="ch"><h3>🎉 Praise</h3><span class="r">${praise.length} fixed in ≤3 days</span></div>
-      ${praise.length?`<table><thead><tr><th>Location</th><th>Fixed in</th><th>Contractor</th></tr></thead><tbody>
+      ${praise.length?`<table><thead><tr><th>Location</th><th>Ward</th><th>Fixed in</th><th>Contractor</th></tr></thead><tbody>
         ${praise.slice(0,25).map(i=>`<tr class="clk" data-open="${i.id}"><td><span class="tdot" style="background:${TYPE[i.type].c};margin-right:6px"></span>${i.street} · ${i.id}</td>
-          <td>${resolutionDays(i)<=0?'<1d':resolutionDays(i)+'d'}</td><td><span class="badge assigned">${contractorName(i)}</span></td></tr>`).join('')}
+          <td>${i.ward}</td><td>${resolutionDays(i)<=0?'<1d':resolutionDays(i)+'d'}</td><td><span class="badge assigned">${contractorName(i)}</span></td></tr>`).join('')}
         </tbody></table>${praise.length>25?`<div class="hint">+${praise.length-25} more fast fixes</div>`:''}`
         :`<div class="cb"><div class="hint" style="padding:4px">No fast fixes yet on this run.</div></div>`}
     </div>
     <div class="card">
       <div class="ch"><h3>⏳ Misses</h3><span class="r">${misses.length} open 7+ days</span></div>
-      ${misses.length?`<table><thead><tr><th>Location</th><th>Days open</th><th>Contractor</th></tr></thead><tbody>
+      ${misses.length?`<table><thead><tr><th>Location</th><th>Ward</th><th>Days open</th><th>Contractor</th></tr></thead><tbody>
         ${misses.slice(0,25).map(i=>`<tr class="clk" data-open="${i.id}"><td><span class="tdot" style="background:${TYPE[i.type].c};margin-right:6px"></span>${i.street} · ${i.id}</td>
-          <td>${daysOpen(i)}d</td><td><span class="badge shame">${contractorName(i)}</span></td></tr>`).join('')}
+          <td>${i.ward}</td><td>${daysOpen(i)}d</td><td><span class="badge shame">${contractorName(i)}</span></td></tr>`).join('')}
         </tbody></table>${misses.length>25?`<div class="hint">+${misses.length-25} more overdue</div>`:''}`
         :`<div class="cb"><div class="hint" style="padding:4px">Nothing has gone unresolved for more than a week — clean sweep.</div></div>`}
     </div>

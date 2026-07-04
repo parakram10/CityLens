@@ -32,3 +32,12 @@ function saveCrewExtra(member){
     localStorage.setItem(CREW_EXTRA_KEY, JSON.stringify(extra));
   }catch{}
 }
+
+/* ---------- ward-level contractor assignment ---------- */
+// A ward can be handed to one crew member as its overall contractor — every repairable
+// issue in that ward routes to them, regardless of issue type, overriding the per-type
+// round-robin below. Persisted so it survives reloads, same pattern as CREW_EXTRA.
+const WARD_CREW_KEY='citylens_ward_crew_v1';
+function loadWardCrew(){ try{return JSON.parse(localStorage.getItem(WARD_CREW_KEY))||{};}catch{return {};} }
+function saveWardCrew(map){ try{localStorage.setItem(WARD_CREW_KEY, JSON.stringify(map));}catch{} }
+const WARD_CREW = loadWardCrew();   // ward code -> crew id
