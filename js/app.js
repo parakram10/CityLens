@@ -605,13 +605,41 @@ function tripsForBus(busId){ // derives real trips from issue history — every 
     return {id:key,date:trip.date,stops,wards:[trip.ward],detections:trip.hits.length};
   }).sort((a,b)=>b.date.localeCompare(a.date));
 }
+
+// Real output from civic_issue_detector, loaded async. Expects detections.json (and,
+// alongside it, annotated.mp4 + the crops/ folder from the SAME run) at the project root —
+// see FINETUNING.md / README.md for how a run's output folder is laid out. When present, it
+// drives the trip replay below instead of the simulated mock timeline.
+let LIVE=null;
+fetch('detections.json').then(r=>r.ok?r.json():Promise.reject(new Error('no detections.json'))).then(d=>{
+  LIVE=d;
+  if(state.view==='fleet') render();
+}).catch(()=>{ LIVE=null; });
+
+function mapDetectorType(t){ // civic_issue_detector issue_type -> this app's issue type keys
+  return ({garbage:'garbage_pile', roadside_litter:'garbage_pile', garbage_pile:'garbage_pile',
+    pothole:'pothole', open_drain:'street_obstruction', manhole:'street_obstruction',
+    waterlogging:'waterlogging'})[t] || 'street_obstruction';
+}
+function liveIssues(){ // LIVE.issues -> shape the feed/map code needs, sorted by first appearance
+  if(!LIVE || !LIVE.issues) return [];
+  return LIVE.issues.map(x=>({
+    id:x.issue_id, type:mapDetectorType(x.issue_type),
+    confidence:(x.peak_confidence_pct||0)/100,
+    severity:Math.max(1,Math.min(5,Math.round((x.peak_confidence_pct||0)/20))),
+    t:x.first_timestamp_sec||0, crop:x.crop_path||null,
+  })).sort((a,b)=>a.t-b.t);
+}
+
 function viewFleet(){
   if(state.bus && state.trip) return viewTripReplay();
   viewFleetList();
 }
 function viewFleetList(){
   document.getElementById('h-title').textContent='Fleet & route replay';
-  document.getElementById('h-sub').textContent='Per-bus contribution — expand a bus to see its logged trips.';
+  document.getElementById('h-sub').textContent = liveIssues().length
+    ? 'Live detections from the on-bus model — open a trip below to watch the synced replay.'
+    : 'Per-bus contribution — expand a bus to see its logged trips.';
   crumb([{t:'Mumbai',go:()=>{state.view='city';render();}},{t:'Fleet'}]);
   const perBus=DATA.buses.map(b=>{const li=issues.filter(i=>i.bus===b);
     return {b,total:li.length,open:li.filter(i=>OPEN.has(i.status)).length,trips:tripsForBus(b)};}).sort((a,b)=>b.total-a.total);
@@ -644,11 +672,15 @@ function viewTripReplay(){
   crumb([{t:'Mumbai',go:()=>{state.view='city';render();}},{t:'Fleet',go:()=>{state.bus=null;state.trip=null;render();}},
     {t:state.bus,go:()=>{state.bus=null;state.trip=null;render();}},{t:fmtDate(trip.date)}]);
   const c=document.getElementById('content');
+  const live=liveIssues();
   c.innerHTML=`<div class="row map-side">
     <div class="card">
       <div class="ch"><h3>Trip replay — ${fmtDate(trip.date)}</h3><span class="r">bus ${state.bus}</span></div>
-      <div class="videoslot"><div class="rd"><span class="d"></span>DASHCAM</div>
-        Drop your sourced clip here (<code>&lt;video&gt;</code> slot) — map pins already sync to the route timeline below.</div>
+      <div class="videoslot" id="videoslot">
+        ${live.length?`<video id="replayVideo" src="annotated.mp4" muted playsinline style="width:100%;height:100%;object-fit:cover;display:block"></video>`:''}
+        <div class="rd"><span class="d"></span>DASHCAM</div>
+        <div id="videoFallback" style="${live.length?'display:none':''}">Drop your sourced clip here (<code>&lt;video&gt;</code> slot) — map pins already sync to the route timeline below.</div>
+      </div>
       <div id="fleetmap"></div>
       <div class="controls">
         <button class="btn primary sm" id="play">▶ Play</button>
@@ -679,7 +711,6 @@ function viewTripReplay(){
   const poly=addRouteOverlay(fm);
   fm.fitBounds(poly.getBounds().pad(0.25));
   const busMarker=L.circleMarker(route[0],{radius:8,fillColor:'#f57c00',color:'#fff',weight:2,fillOpacity:1}).addTo(fm);
-  const routeIssues=DATA.replay_ids.map(id=>issues.find(i=>i.id===id)).filter(Boolean);
   const totalKm=8.6;
 
   function posAt(t){ // t in 0..1 -> [lat,lon] along the fixed route
@@ -687,39 +718,110 @@ function viewTripReplay(){
     const a=route[idx],b=route[idx+1];
     return [a[0]+(b[0]-a[0])*f, a[1]+(b[1]-a[1])*f];
   }
-  // each issue's own closest-approach distance to this route + a small margin — guarantees a reveal fires
-  // right as the bus passes its nearest point, instead of guessing one fixed radius for every issue
-  function step(){
-    replay.t=Math.min(1,replay.t+0.006);
-    const p=posAt(replay.t);
-    busMarker.setLatLng(p);
-    document.getElementById('fill').style.width=(replay.t*100)+'%';
-    document.getElementById('clock').textContent=(replay.t*totalKm).toFixed(1)+' km';
-    // evenly spaced along the route (1/7, 2/7, ... 6/7) and dropped exactly where the bus currently is —
-    // the issues' own real coordinates sit far from this fixed demo route, so plotting there instead
-    // keeps the pins spread out and perfectly in sync with the moving marker
-    routeIssues.forEach((i,stopIdx)=>{ const at=(stopIdx+1)/(routeIssues.length+1);
-      if(replay.t>=at && !replay.seen.has(i.id)){ replay.seen.add(i.id);
-        markerAt(i,p).addTo(fm); addFeed(i); }});
-    if(replay.t>=1){stopReplay();}
+  function fmtClock(sec){ const m=Math.floor(sec/60), s=Math.floor(sec%60); return `${m}:${String(s).padStart(2,'0')}`; }
+  function markerForLive(i){ // no GPS from the detector — drop the pin at the bus's position (km along route) when it fired
+    const km=(replay.t*totalKm).toFixed(1);
+    return L.circleMarker(posAt(replay.t),{radius:3+i.severity*1.4,fillColor:TYPE[i.type].c,color:'#fff',weight:1.4,fillOpacity:.9})
+      .bindPopup(`<b>${TYPE[i.type].label}</b> · ${Math.round(i.confidence*100)}% confidence<br>${fmtClock(i.t)} into clip · ${km} km along route`);
   }
-  function addFeed(i){ const feed=document.getElementById('feed');
+  function addFeedLive(i){
+    const feed=document.getElementById('feed');
     if(replay.seen.size===1)feed.innerHTML='';
+    const km=(replay.t*totalKm).toFixed(1);
     const el=document.createElement('div');el.className='feeditem';
     el.innerHTML=`<span class="tdot" style="background:${TYPE[i.type].c}"></span>
+      ${i.crop?`<img src="${i.crop}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;flex:0 0 36px" onerror="this.remove()">`:''}
       <div class="meta"><div class="t1">${TYPE[i.type].label} <span class="sev" style="background:${SEVC[i.severity]}">SEV ${i.severity}</span></div>
-      <div class="t2">${(replay.t*totalKm).toFixed(1)} km · ${Math.round(i.confidence*100)}% · ${i.id}</div></div>`;
-    el.onclick=()=>openIssue(i.id); feed.prepend(el);
+      <div class="t2">${fmtClock(i.t)} into clip · ${km} km · ${Math.round(i.confidence*100)}% · ${i.id}</div></div>`;
+    feed.prepend(el);
     document.getElementById('feedn').textContent=replay.seen.size;
   }
-  window._replayStep=step;
-  document.getElementById('play').onclick=toggleReplay;
-  document.getElementById('reset').onclick=()=>{stopReplay();replay.t=0;replay.seen.clear();render();};
+
+  // real detector output (video + timestamped detections) takes over the replay when present;
+  // otherwise it falls back to our simulated trip timeline built from this bus's actual stops
+  const video=document.getElementById('replayVideo');
+  if(video){
+    let triedRawSource=false;
+    video.onerror=()=>{
+      if(!triedRawSource){
+        // annotated.mp4 missing/unplayable — try the raw dashcam clip (no boxes, still timestamp-synced)
+        triedRawSource=true;
+        video.src='source.mp4';
+        video.load();
+        return;
+      }
+      // neither annotated.mp4 nor source.mp4 are playable here — fall back to the simulated timeline
+      video.remove();
+      const fb=document.getElementById('videoFallback'); if(fb)fb.style.display='';
+      wireSimulated();
+    };
+    video.onloadedmetadata=wireVideoDriven;
+  } else {
+    wireSimulated();
+  }
+
+  function wireVideoDriven(){
+    video.ontimeupdate=()=>{
+      replay.t=video.duration?video.currentTime/video.duration:0;
+      busMarker.setLatLng(posAt(replay.t));
+      document.getElementById('fill').style.width=(replay.t*100)+'%';
+      document.getElementById('clock').textContent=(replay.t*totalKm).toFixed(1)+' km';
+      live.forEach(i=>{
+        if(video.currentTime>=i.t && !replay.seen.has(i.id)){
+          replay.seen.add(i.id); markerForLive(i).addTo(fm); addFeedLive(i);
+        }
+      });
+    };
+    video.onended=stopReplay;
+    document.getElementById('track').onclick=(e)=>{
+      const r=e.currentTarget.getBoundingClientRect();
+      video.currentTime=((e.clientX-r.left)/r.width)*(video.duration||0);
+    };
+    document.getElementById('play').onclick=()=>{
+      const b=document.getElementById('play');
+      if(video.paused){video.play();b.textContent='❚❚ Pause';} else {video.pause();b.textContent='▶ Play';}
+    };
+    document.getElementById('reset').onclick=()=>{
+      stopReplay();replay.t=0;replay.seen.clear();render();
+    };
+  }
+
+  function wireSimulated(){
+    // this bus's real trip stops — evenly spaced along the fixed demo route and dropped exactly where
+    // the bus currently is, since the issues' own real coordinates sit far from this decorative path
+    const routeIssues=trip.stops;
+    function step(){
+      replay.t=Math.min(1,replay.t+0.006);
+      const p=posAt(replay.t);
+      busMarker.setLatLng(p);
+      document.getElementById('fill').style.width=(replay.t*100)+'%';
+      document.getElementById('clock').textContent=(replay.t*totalKm).toFixed(1)+' km';
+      routeIssues.forEach((i,stopIdx)=>{ const at=(stopIdx+1)/(routeIssues.length+1);
+        if(replay.t>=at && !replay.seen.has(i.id)){ replay.seen.add(i.id);
+          markerAt(i,p).addTo(fm); addFeed(i); }});
+      if(replay.t>=1){stopReplay();}
+    }
+    function addFeed(i){ const feed=document.getElementById('feed');
+      if(replay.seen.size===1)feed.innerHTML='';
+      const el=document.createElement('div');el.className='feeditem';
+      el.innerHTML=`<span class="tdot" style="background:${TYPE[i.type].c}"></span>
+        <div class="meta"><div class="t1">${TYPE[i.type].label} <span class="sev" style="background:${SEVC[i.severity]}">SEV ${i.severity}</span></div>
+        <div class="t2">${(replay.t*totalKm).toFixed(1)} km · ${Math.round(i.confidence*100)}% · ${i.id}</div></div>`;
+      el.onclick=()=>openIssue(i.id); feed.prepend(el);
+      document.getElementById('feedn').textContent=replay.seen.size;
+    }
+    window._replayStep=step;
+    document.getElementById('play').onclick=toggleReplay;
+    document.getElementById('reset').onclick=()=>{stopReplay();replay.t=0;replay.seen.clear();render();};
+  }
 }
 function toggleReplay(){ const b=document.getElementById('play');
   if(replay.timer){stopReplay();} else {b.textContent='❚❚ Pause';replay.timer=setInterval(()=>window._replayStep(),90);} }
-function stopReplay(){ if(replay.timer){clearInterval(replay.timer);replay.timer=null;}
-  const b=document.getElementById('play'); if(b)b.textContent= replay.t>=1?'▶ Replay':'▶ Play'; }
+function stopReplay(){
+  if(replay.timer){clearInterval(replay.timer);replay.timer=null;}
+  const v=document.getElementById('replayVideo'); if(v && !v.paused)v.pause();
+  const b=document.getElementById('play'); if(b)b.textContent= replay.t>=1?'▶ Replay':'▶ Play';
+}
 
 /* ---------- issue detail drawer ---------- */
 let issueCtx={};

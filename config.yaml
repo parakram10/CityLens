@@ -1,0 +1,199 @@
+# Civic Issue Video Detector configuration
+#
+# Active demo models only. Litter is a two-model ensemble; road defects use the
+# two RDD2022 models. Add more YOLO .pt models by copying a block and changing
+# name, weights, issue_group, and class_map.
+
+models:
+  # LITTER ENSEMBLE (best-of-both, validated on the vid1 val set):
+  #   * litter_finetuned (v2, YOLO11m) - generalizes across vid1 AND unseen vid2,
+  #     but low recall on vid1's subtler litter (val: ~10% frame recall).
+  #   * litter_finetuned_v1 (nano)     - high recall on vid1-like footage
+  #     (val: ~72%) but does not generalize to vid2.
+  # Running both + cross_model_nms + the tracker gives one issue per object and
+  # covers both videos. imgsz 640 = the size these were trained at (they fire
+  # more at 640 than 1280). Disable one to A/B if needed.
+  - name: litter_finetuned
+    enabled: true
+    weights: models/litter_finetuned.pt
+    issue_group: waste_litter
+    default_issue_type: garbage
+    confidence_threshold: 0.25
+    iou_threshold: 0.45
+    image_size: 640
+    include_classes:
+      - garbage
+    # Loose y-band; the road_roi polygon is the real road-zone gate.
+    min_center_y_ratio: 0.20
+    min_bottom_y_ratio: 0.30
+    max_box_area_ratio: 0.40
+    max_box_width_ratio: 0.65
+    max_box_height_ratio: 0.60
+    tile_inference: false
+    class_map:
+      garbage: garbage
+
+  - name: litter_finetuned_v1
+    enabled: true
+    weights: models/litter_finetuned_v1.pt
+    issue_group: waste_litter
+    default_issue_type: garbage
+    confidence_threshold: 0.25
+    iou_threshold: 0.45
+    image_size: 640
+    include_classes:
+      - garbage
+    min_center_y_ratio: 0.20
+    min_bottom_y_ratio: 0.30
+    max_box_area_ratio: 0.40
+    max_box_width_ratio: 0.65
+    max_box_height_ratio: 0.60
+    tile_inference: false
+    class_map:
+      garbage: garbage
+
+  - name: rdd2022_yolo12m
+    enabled: true
+    weights: models/rdd2022_yolo12m_seed0_best.pt
+    issue_group: road_defect
+    default_issue_type: pothole
+    confidence_threshold: 0.15
+    iou_threshold: 0.45
+    image_size: 640
+    include_classes:
+      - D40
+      - d40
+      - pothole
+      - Pothole
+    class_map:
+      D40: pothole
+      d40: pothole
+      pothole: pothole
+      Pothole: pothole
+
+  - name: rdd2022_yolo12s_800px
+    enabled: true
+    weights: models/rdd2022_yolo12s_800px_seed0_best.pt
+    issue_group: road_defect
+    default_issue_type: pothole
+    confidence_threshold: 0.15
+    iou_threshold: 0.45
+    image_size: 800
+    include_classes:
+      - D40
+      - d40
+      - pothole
+      - Pothole
+    class_map:
+      D40: pothole
+      d40: pothole
+      pothole: pothole
+      Pothole: pothole
+
+processing:
+  frame_stride: 1
+  crop_padding_ratio: 0.08
+  save_annotated_video: true
+  save_detection_crops: true
+  save_screen_grabs: true
+  # Skip candidate inference frames that are visually near-identical to the last
+  # inferred frame. This keeps output responsive on static/slow video segments.
+  skip_similar_frames: true
+  similar_frame_threshold: 3.5
+  similar_frame_downscale_width: 160
+  max_similar_frame_skips: 8
+  # Keep the last boxes visible on frames skipped by frame_stride. This affects
+  # display/annotated video only; JSON detections are still real inference frames.
+  persist_detections_between_inferences: true
+  # 0 means auto: persist for frame_stride - 1 frames.
+  max_persisted_detection_frames: 0
+  # Motion-tolerant tracking: one physical issue = ONE record, even as the
+  # camera moves and the box drifts across the frame. This is the main fix for
+  # the same pothole/litter being counted many times. It supersedes the static
+  # temporal_dedupe below (temporal_dedupe is only used when track_issues:false).
+  track_issues: true
+  # Match a detection to an existing track when IoU >= track_iou OR the
+  # normalized centroid distance <= a gate that grows with camera motion.
+  track_iou: 0.30
+  track_center_dist_ratio: 0.12
+  track_motion_gate_growth: 0.04
+  # Drop a track after this many inference frames unseen (0 = never expire).
+  track_max_age_frames: 45
+  # An issue must appear on at least this many inference frames to be emitted.
+  # 2+ discards single-frame false positives for free; set 1 to keep everything.
+  track_min_hits: 2
+
+  # Legacy static-camera de-dupe (used only when track_issues:false).
+  temporal_dedupe: true
+  temporal_dedupe_iou: 0.35
+  temporal_dedupe_grid_cols: 8
+  temporal_dedupe_grid_rows: 6
+  temporal_dedupe_ttl_frames: 0
+  # Set to true to drop overlapping detections of the same issue_type across models.
+  cross_model_nms: true
+  cross_model_nms_iou: 0.45
+
+# Class-agnostic false-positive filter. Runs a stock COCO detector once per
+# frame and DROPS any litter/garbage box sitting on a person, two-wheeler,
+# vehicle or animal. This is the fix for people and riders being flagged as
+# litter. yolo11n.pt (~5 MB) is auto-downloaded by Ultralytics on first run.
+suppressor:
+  enabled: true
+  weights: yolo11n.pt
+  task: detect
+  confidence_threshold: 0.35
+  image_size: 640
+  # Drop an issue box when this fraction of its area overlaps a suppressor box
+  # (litter sitting on a person/vehicle).
+  containment_threshold: 0.45
+  # Also drop when the issue box covers this fraction of a suppressor box
+  # (a big "litter" box wrapping a car/person).
+  vehicle_cover_threshold: 0.60
+  suppress_classes:
+    - person
+    - bicycle
+    - motorcycle
+    - car
+    - bus
+    - truck
+    - train
+    - dog
+    - cat
+    - cow
+    - horse
+  # Only filter these issue groups; potholes/road defects are left untouched.
+  apply_to_issue_groups:
+    - waste_litter
+
+# Road region-of-interest mask. Litter is accepted only when its ground-contact
+# point (bottom-center of the box) falls inside this polygon over the road/verge.
+# This keeps ground-level litter on the left and right while rejecting name
+# boards, buildings and trees ABOVE the road line, at any confidence.
+# The cyan outline is drawn on the annotated video so you can tune the shape to
+# your camera. Points are normalized (x, y in 0..1), listed clockwise.
+road_roi:
+  enabled: true
+  # Road-faced trapezoid: top edge raised toward the horizon (y=0.50) so the sky,
+  # buildings and tall roadside vegetation are excluded, fanning out to the full
+  # width at the bottom to keep litter on both verges. Validated on the val set:
+  # this raised top keeps the SAME positive-frame recall (~72%) as the old
+  # mid-frame top while looking more road-faced. Going higher (y=0.55) looks more
+  # dramatic but clips far-verge litter (recall drops ~13pts) - raise it further
+  # only if your camera's horizon is lower and you accept that trade.
+  polygon:
+    - [0.13, 0.50]
+    - [0.87, 0.50]
+    - [1.0, 1.0]
+    - [0.0, 1.0]
+  apply_to_issue_groups:
+    - waste_litter
+  test_point: bottom_center
+  draw: true
+
+annotation:
+  box_thickness: 2
+  font_scale: 0.60
+  show_raw_class: true
+  show_model_name: false
+  # Prefix each box with its stable issue id (e.g. "#12") to make de-dup visible.
+  show_issue_id: true
