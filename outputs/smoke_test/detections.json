@@ -1,0 +1,130 @@
+{
+  "source": "/Users/abhishekgiri/Desktop/vid-1_annotated.mp4",
+  "run_dir": "outputs/smoke_test",
+  "created_at_utc": "2026-07-05T11:34:08.285482+00:00",
+  "completed_at_utc": "2026-07-05T11:34:52.279320+00:00",
+  "video": {
+    "fps": 7.5,
+    "width": 1280,
+    "height": 720,
+    "reported_total_frames": 2250,
+    "last_frame_index": 100,
+    "inference_frames_processed": 100,
+    "similar_frames_skipped": 0,
+    "raw_detections_total": 1,
+    "duplicate_detections_suppressed": 1
+  },
+  "issue_summary": {
+    "unique_issues": 0,
+    "by_issue_type": {}
+  },
+  "outputs": {
+    "annotated_video_path": "annotated.mp4",
+    "detections_json_path": "detections.json",
+    "screen_grabs_dir": "screen_grabs",
+    "crops_dir": "crops"
+  },
+  "models": [
+    {
+      "name": "litter_finetuned",
+      "weights": "models/litter_finetuned.pt",
+      "issue_group": "waste_litter",
+      "confidence_threshold": 0.25,
+      "iou_threshold": 0.45,
+      "image_size": 640
+    },
+    {
+      "name": "litter_finetuned_v1",
+      "weights": "models/litter_finetuned_v1.pt",
+      "issue_group": "waste_litter",
+      "confidence_threshold": 0.25,
+      "iou_threshold": 0.45,
+      "image_size": 640
+    },
+    {
+      "name": "rdd2022_yolo12m",
+      "weights": "models/rdd2022_yolo12m_seed0_best.pt",
+      "issue_group": "road_defect",
+      "confidence_threshold": 0.15,
+      "iou_threshold": 0.45,
+      "image_size": 640
+    },
+    {
+      "name": "rdd2022_yolo12s_800px",
+      "weights": "models/rdd2022_yolo12s_800px_seed0_best.pt",
+      "issue_group": "road_defect",
+      "confidence_threshold": 0.15,
+      "iou_threshold": 0.45,
+      "image_size": 800
+    }
+  ],
+  "suppressor": {
+    "enabled": true,
+    "weights": "yolo11n.pt",
+    "confidence_threshold": 0.35,
+    "containment_threshold": 0.45,
+    "suppress_classes": [
+      "person",
+      "bicycle",
+      "motorcycle",
+      "car",
+      "bus",
+      "truck",
+      "train",
+      "dog",
+      "cat",
+      "cow",
+      "horse"
+    ],
+    "apply_to_issue_groups": [
+      "waste_litter"
+    ]
+  },
+  "road_roi": {
+    "enabled": true,
+    "polygon": [
+      [
+        0.13,
+        0.5
+      ],
+      [
+        0.87,
+        0.5
+      ],
+      [
+        1.0,
+        1.0
+      ],
+      [
+        0.0,
+        1.0
+      ]
+    ],
+    "apply_to_issue_groups": [
+      "waste_litter"
+    ],
+    "test_point": "bottom_center"
+  },
+  "processing": {
+    "frame_stride": 1,
+    "skip_similar_frames": true,
+    "similar_frame_threshold": 3.5,
+    "similar_frame_downscale_width": 160,
+    "max_similar_frame_skips": 8,
+    "persist_detections_between_inferences": true,
+    "max_persisted_detection_frames": 0,
+    "track_issues": true,
+    "track_iou": 0.3,
+    "track_center_dist_ratio": 0.12,
+    "track_motion_gate_growth": 0.04,
+    "track_max_age_frames": 45,
+    "track_min_hits": 2,
+    "temporal_dedupe": true,
+    "temporal_dedupe_iou": 0.35,
+    "cross_model_nms": true,
+    "cross_model_nms_iou": 0.45
+  },
+  "frames_with_detections": [],
+  "issues": [],
+  "detections": []
+}
