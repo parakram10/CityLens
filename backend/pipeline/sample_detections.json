@@ -1,0 +1,76 @@
+{
+  "source": "assets/demo.mp4",
+  "created_at_utc": "2026-07-05T09:00:00+00:00",
+  "completed_at_utc": "2026-07-05T09:04:12+00:00",
+  "video": {
+    "fps": 30.0,
+    "width": 1920,
+    "height": 1080,
+    "reported_total_frames": 6000,
+    "last_frame_index": 5999,
+    "inference_frames_processed": 5999
+  },
+  "issue_summary": {
+    "unique_issues": 8,
+    "by_issue_type": { "pothole": 5, "garbage": 3 }
+  },
+  "_note": "Bundled sample so the dashboard works before the real detector is run. Same shape as the detector's outputs/run_*/detections.json. Regenerate js/live.js from a real run with pipeline/run_demo.sh.",
+  "issues": [
+    {
+      "issue_id": "issue_000001", "issue_type": "garbage", "issue_group": "waste_litter",
+      "model_name": "litter_finetuned", "peak_confidence_pct": 71.4, "detection_count": 22,
+      "first_frame_index": 240, "last_frame_index": 470,
+      "first_timestamp_sec": 8.0, "last_timestamp_sec": 15.7,
+      "bbox_xyxy": [640, 720, 980, 1010]
+    },
+    {
+      "issue_id": "issue_000002", "issue_type": "pothole", "issue_group": "road_defect",
+      "model_name": "rdd2022_yolo12m", "peak_confidence_pct": 84.2, "detection_count": 37,
+      "first_frame_index": 1180, "last_frame_index": 1410,
+      "first_timestamp_sec": 39.3, "last_timestamp_sec": 47.0,
+      "bbox_xyxy": [820, 640, 1180, 860]
+    },
+    {
+      "issue_id": "issue_000003", "issue_type": "garbage", "issue_group": "waste_litter",
+      "model_name": "litter_finetuned_v1", "peak_confidence_pct": 63.9, "detection_count": 14,
+      "first_frame_index": 1800, "last_frame_index": 1880,
+      "first_timestamp_sec": 60.0, "last_timestamp_sec": 62.7,
+      "bbox_xyxy": [1120, 700, 1360, 940]
+    },
+    {
+      "issue_id": "issue_000004", "issue_type": "garbage", "issue_group": "waste_litter",
+      "model_name": "litter_finetuned", "peak_confidence_pct": 58.1, "detection_count": 9,
+      "first_frame_index": 1840, "last_frame_index": 1910,
+      "first_timestamp_sec": 61.3, "last_timestamp_sec": 63.7,
+      "bbox_xyxy": [1180, 690, 1410, 950]
+    },
+    {
+      "issue_id": "issue_000005", "issue_type": "pothole", "issue_group": "road_defect",
+      "model_name": "rdd2022_yolo12s_800px", "peak_confidence_pct": 79.6, "detection_count": 28,
+      "first_frame_index": 2600, "last_frame_index": 2820,
+      "first_timestamp_sec": 86.7, "last_timestamp_sec": 94.0,
+      "bbox_xyxy": [700, 660, 940, 820]
+    },
+    {
+      "issue_id": "issue_000006", "issue_type": "pothole", "issue_group": "road_defect",
+      "model_name": "rdd2022_yolo12m", "peak_confidence_pct": 88.9, "detection_count": 41,
+      "first_frame_index": 3600, "last_frame_index": 3850,
+      "first_timestamp_sec": 120.0, "last_timestamp_sec": 128.3,
+      "bbox_xyxy": [560, 700, 1120, 1000]
+    },
+    {
+      "issue_id": "issue_000007", "issue_type": "pothole", "issue_group": "road_defect",
+      "model_name": "rdd2022_yolo12m", "peak_confidence_pct": 76.3, "detection_count": 19,
+      "first_frame_index": 4500, "last_frame_index": 4700,
+      "first_timestamp_sec": 150.0, "last_timestamp_sec": 156.7,
+      "bbox_xyxy": [900, 650, 1130, 810]
+    },
+    {
+      "issue_id": "issue_000008", "issue_type": "pothole", "issue_group": "road_defect",
+      "model_name": "rdd2022_yolo12s_800px", "peak_confidence_pct": 81.0, "detection_count": 24,
+      "first_frame_index": 5400, "last_frame_index": 5640,
+      "first_timestamp_sec": 180.0, "last_timestamp_sec": 188.0,
+      "bbox_xyxy": [780, 680, 1040, 880]
+    }
+  ]
+}

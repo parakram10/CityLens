@@ -1,0 +1,29 @@
+# ── OS / editor ──────────────────────────────────────────────
+.DS_Store
+
+# ── Python ───────────────────────────────────────────────────
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# ── Model weights — large; recreated via backend/setup.sh ────
+# (custom fine-tuned weights live on disk in backend/detector/models
+#  but are kept out of git; download public ones with download_models.py)
+*.pt
+*.onnx
+
+# ── Detector run outputs (regenerated every run) ─────────────
+backend/detector/outputs/
+
+# ── Training data (only needed for fine-tuning) ──────────────
+backend/detector/dataset/
+
+# ── Large source videos — place locally, not committed ───────
+assets/*.mp4
+assets/*.mov
+
+# NOTE: these generated files ARE committed on purpose — the deployed
+# GitHub Pages site depends on them:
+#   js/live.js, js/live.json, assets/evidence/*.jpg,
+#   backend/pipeline/motion_*.json

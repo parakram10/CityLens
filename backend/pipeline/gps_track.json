@@ -1,0 +1,26 @@
+{
+  "route": "A-71",
+  "description": "Bandra -> Goregaon along the Western Express Highway (matches DATA.routes['A-71'] in js/data.js so live detections land on the replay corridor).",
+  "default_bus": "MH01-BST-2087",
+  "duration_sec": 240.0,
+  "_note": "duration_sec is a fallback. build_dashboard_data.py overrides it with the real clip duration (last_frame_index / fps) from the detector's summary so detections spread across the whole route regardless of clip length. Waypoints are [lat, lon]; drop in a real GPX/CSV later by replacing this file's waypoints.",
+  "waypoints": [
+    { "lat": 19.055, "lon": 72.840 },
+    { "lat": 19.061, "lon": 72.836 },
+    { "lat": 19.070, "lon": 72.834 },
+    { "lat": 19.080, "lon": 72.836 },
+    { "lat": 19.090, "lon": 72.842 },
+    { "lat": 19.099, "lon": 72.846 },
+    { "lat": 19.107, "lon": 72.849 },
+    { "lat": 19.115, "lon": 72.851 },
+    { "lat": 19.119, "lon": 72.846 },
+    { "lat": 19.124, "lon": 72.844 },
+    { "lat": 19.130, "lon": 72.849 },
+    { "lat": 19.136, "lon": 72.852 },
+    { "lat": 19.144, "lon": 72.851 },
+    { "lat": 19.152, "lon": 72.849 },
+    { "lat": 19.160, "lon": 72.850 },
+    { "lat": 19.168, "lon": 72.849 },
+    { "lat": 19.155, "lon": 72.855 }
+  ]
+}

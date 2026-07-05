@@ -387,8 +387,12 @@ function viewFleet(){
   c.innerHTML=`<div class="row map-side">
     <div class="card">
       <div class="ch"><h3>Route replay — A-71 (Bandra → Goregaon)</h3><span class="r">bus MH01-BST-2087</span></div>
-      <div class="videoslot"><div class="rd"><span class="d"></span>DASHCAM</div>
-        Drop your sourced clip here (<code>&lt;video&gt;</code> slot) — map pins already sync to the route timeline below.</div>
+      <div class="videoslot" style="position:relative;padding:0;overflow:hidden;background:#12151a">
+        <div class="rd" style="position:absolute;top:8px;left:8px;z-index:2"><span class="d"></span>DASHCAM</div>
+        <video id="dashcam" src="assets/demo.mp4" muted playsinline preload="metadata"
+          style="width:100%;display:block;background:#12151a;max-height:320px;object-fit:contain"></video>
+        <div id="videohint" style="display:none;padding:16px;color:var(--faint);font-size:13px">
+          Drop your clip at <code>assets/demo.mp4</code> — map pins still sync to the route timeline below.</div></div>
       <div id="fleetmap"></div>
       <div class="controls">
         <button class="btn primary sm" id="play">▶ Play</button>
@@ -420,15 +424,37 @@ function viewFleet(){
     return [a[0]+(b[0]-a[0])*f, a[1]+(b[1]-a[1])*f];
   }
   const totalKm=8.6;
-  function step(){
-    replay.t=Math.min(1,replay.t+0.006);
+  function applyT(){ // render the route/feed for the current replay.t (0..1)
     const p=seg(replay.t); bus.setLatLng(p);
     document.getElementById('fill').style.width=(replay.t*100)+'%';
     document.getElementById('clock').textContent=(replay.t*totalKm).toFixed(1)+' km';
     routeIssues.forEach((i,idx)=>{ const at=(idx+1)/(routeIssues.length+1);
       if(replay.t>=at && !replay.seen.has(i.id)){ replay.seen.add(i.id);
         markerFor(i).addTo(fm); addFeed(i); }});
+  }
+  function step(){ // timer path (no dashcam clip): advance t ourselves
+    replay.t=Math.min(1,replay.t+0.006);
+    applyT();
     if(replay.t>=1){stopReplay();}
+  }
+  // Dashcam path: when assets/demo.mp4 loads, playback drives the timeline so the
+  // map bus, distance, and detection feed stay in sync with the video.
+  const video=document.getElementById('dashcam');
+  replay.video=null; replay.videoReady=false;
+  if(video){
+    video.addEventListener('loadedmetadata',()=>{
+      if(video.duration&&isFinite(video.duration)&&video.duration>0){ replay.video=video; replay.videoReady=true; }
+    });
+    video.addEventListener('timeupdate',()=>{
+      if(!replay.videoReady||!video.duration) return;
+      replay.t=Math.min(1, video.currentTime/video.duration); applyT();
+      if(replay.t>=1) stopReplay();
+    });
+    video.addEventListener('error',()=>{ // no clip present — fall back to timer animation
+      replay.video=null; replay.videoReady=false;
+      video.style.display='none';
+      const h=document.getElementById('videohint'); if(h)h.style.display='block';
+    });
   }
   function addFeed(i){ const feed=document.getElementById('feed');
     if(replay.seen.size===1)feed.innerHTML='';
@@ -441,11 +467,18 @@ function viewFleet(){
   }
   window._replayStep=step;
   document.getElementById('play').onclick=toggleReplay;
-  document.getElementById('reset').onclick=()=>{stopReplay();replay.t=0;replay.seen.clear();viewFleet();};
+  document.getElementById('reset').onclick=()=>{stopReplay();replay.t=0;replay.seen.clear();
+    if(replay.video)replay.video.currentTime=0; viewFleet();};
 }
 function toggleReplay(){ const b=document.getElementById('play');
+  if(replay.video&&replay.videoReady){ // dashcam drives the timeline
+    if(replay.video.paused){ replay.video.play().catch(()=>{}); b.textContent='❚❚ Pause'; }
+    else { replay.video.pause(); b.textContent='▶ Play'; }
+    return;
+  }
   if(replay.timer){stopReplay();} else {b.textContent='❚❚ Pause';replay.timer=setInterval(()=>window._replayStep(),90);} }
 function stopReplay(){ if(replay.timer){clearInterval(replay.timer);replay.timer=null;}
+  if(replay.video&&!replay.video.paused)replay.video.pause();
   const b=document.getElementById('play'); if(b)b.textContent= replay.t>=1?'▶ Replay':'▶ Play'; }
 
 /* ---------- issue detail drawer ---------- */
@@ -461,7 +494,7 @@ function openIssue(id,opts){
       <div style="font-size:12px;color:var(--faint)">${i.id} · Ward ${i.ward}</div></div>
       <button class="x" id="dx">×</button></div>
     <div class="db">
-      <div class="evidence">${evidenceSVG(i)}</div>
+      <div class="evidence">${evidenceHTML(i)}</div>
       <div style="display:flex;gap:8px;margin-top:12px">
         <span class="sev" style="background:${SEVC[i.severity]};padding:4px 9px">SEVERITY ${i.severity}</span>
         <span class="badge ${i.status}" style="padding:4px 11px">${i.status.replace('_',' ')}</span>
@@ -550,6 +583,18 @@ function afterAction(i){ // recompute scores + refresh underlying view, keep dra
 }
 function closeDrawer(){document.getElementById('drawer').classList.remove('on');document.getElementById('crewModal').classList.remove('on');document.getElementById('scrim').classList.remove('on');}
 
+// Real detector evidence (annotated frame / crop) when the pipeline provides it,
+// falling back to the schematic if the image is absent or fails to load.
+function evidenceHTML(i){
+  if(i.photo){
+    return `<img src="${i.photo}" alt="${TYPE[i.type].label} detection" class="evimg"
+      style="width:100%;height:100%;object-fit:cover;display:block"
+      onerror="this.outerHTML=window.__evSVG('${i.id}')">
+      <span class="evtag">detected frame · ${Math.round(i.confidence*100)}% · ${i.id}</span>`;
+  }
+  return evidenceSVG(i);
+}
+window.__evSVG=function(id){ const i=issues.find(x=>x.id===id); return i?evidenceSVG(i):''; };
 function evidenceSVG(i){
   const c=TYPE[i.type].c;
   return `<svg viewBox="0 0 320 200" width="100%" height="100%" style="display:block">
@@ -595,3 +640,39 @@ function applyRoleUI(session){
   document.body.classList.add('role-'+session.role);
   if(session.role==='ward_officer'){ state.view='ward'; state.ward=session.ward; }
 }
+
+/* ---------- live processing feed ----------
+   Polls js/live.json (regenerated by the pipeline as the detector processes the video)
+   and updates the dashboard IN PLACE — new, de-duplicated detections appear on the map
+   and lists without a page reload. No-ops on static hosting where live.json is absent. */
+let __liveRev=null;
+async function pollLive(){
+  try{
+    const r=await fetch('js/live.json?_='+Date.now(),{cache:'no-store'});
+    if(!r.ok) return;
+    const p=await r.json();
+    if(!p||!Array.isArray(p.issues)||p.rev===__liveRev) return;
+    const first=__liveRev===null;
+    __liveRev=p.rev;
+    const prevLive=issues.filter(i=>String(i.id).startsWith('CL-L')).length;
+    const seed=issues.filter(i=>!String(i.id).startsWith('CL-L'));  // keep seed + officer edits
+    issues.length=0; issues.push(...seed, ...p.issues);             // mutate the shared array in place
+    if(Array.isArray(p.replay)) DATA.replay_ids=p.replay;
+    Object.assign(SCORES, wardScores());
+    if(first){ counts(); return; }                                  // silent sync at startup
+    liveToast(p.issues.length, p.issues.length-prevLive, p.partial);
+    // Refresh the view behind the user only when they aren't mid-interaction.
+    const busy=document.getElementById('drawer').classList.contains('on')
+      || document.getElementById('crewModal').classList.contains('on')
+      || state.view==='fleet';
+    if(busy) counts(); else render();
+  }catch(e){/* live.json not served (static host) — ignore */}
+}
+function liveToast(total, added, partial){
+  let el=document.getElementById('liveToast');
+  if(!el){ el=document.createElement('div'); el.id='liveToast'; el.className='livetoast'; document.body.appendChild(el); }
+  el.innerHTML=`<span class="dot"></span> ${partial?'Processing video':'Processing complete'} · <b>${total}</b> detections${added>0?` · <span style="color:#8fd39a">+${added} new</span>`:''}`;
+  el.classList.add('show');
+  clearTimeout(el._t); el._t=setTimeout(()=>el.classList.remove('show'), 4200);
+}
+if(getSession()){ pollLive(); setInterval(pollLive, 8000); }
