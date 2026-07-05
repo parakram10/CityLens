@@ -45,8 +45,12 @@ def _frame_timestamp(cap: cv2.VideoCapture, frame_index: int, fps: float) -> flo
 
 
 def _open_video_writer(path: Path, width: int, height: int, fps: float) -> cv2.VideoWriter:
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    # avc1 (H.264) so the output plays directly in browsers; mp4v (MPEG-4 Part 2) does not.
+    fourcc = cv2.VideoWriter_fourcc(*"avc1")
     writer = cv2.VideoWriter(str(path), fourcc, fps, (width, height))
+    if not writer.isOpened():
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        writer = cv2.VideoWriter(str(path), fourcc, fps, (width, height))
     if not writer.isOpened():
         raise RuntimeError(f"Could not open video writer: {path}")
     return writer

@@ -1,0 +1,18 @@
+# Python env
+.venv/
+__pycache__/
+*.pyc
+
+# civic_issue_detector training/inference artifacts — not needed by the website itself
+models/*.pt
+dataset/
+outputs/
+
+# Per-run detector output at the project root: keep detections.json/summary.json + crops/
+# (small, used by the Fleet & Replay demo) but not the raw video or full screen grabs.
+annotated.mp4
+source.mp4
+screen_grabs/
+
+# OS cruft
+.DS_Store

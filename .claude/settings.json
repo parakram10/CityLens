@@ -1,7 +1,17 @@
 {
   "permissions": {
     "allow": [
-      "Bash(awk '{print length, NR}' js/data.js)"
+      "Bash(awk '{print length, NR}' js/data.js)",
+      "Bash(node \"/private/tmp/claude-501/-Users-abhishekgiri-Desktop-chalo-cards-website-CityLens/316447c2-1ed8-4480-ab3d-c2db37743cb2/scratchpad/verify_reset.js\")",
+      "Bash(node \"/private/tmp/claude-501/-Users-abhishekgiri-Desktop-chalo-cards-website-CityLens/316447c2-1ed8-4480-ab3d-c2db37743cb2/scratchpad/verify_reset2.js\")",
+      "Bash(pkill -f \"npx serve\")",
+      "Bash(git rev-list *)",
+      "Bash(git cat-file *)",
+      "Bash(awk '$1==\"blob\"{print $3, $4}')",
+      "Bash(git rm *)",
+      "Bash(echo \"---exit $?---\")",
+      "Bash(git add *)",
+      "Bash(awk '{print $1}')"
     ]
   }
 }

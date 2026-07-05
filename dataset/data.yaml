@@ -1,5 +1,0 @@
-path: /Users/atmeshmishra/Desktop/cityLens/civic_issue_video_detector/dataset
-train: images/train
-val: images/val
-names:
-  0: garbage
