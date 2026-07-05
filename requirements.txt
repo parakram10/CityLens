@@ -1,0 +1,8 @@
+ultralytics>=8.3.0
+opencv-python>=4.8.0
+PyYAML>=6.0.1
+numpy>=1.24.0
+huggingface_hub>=0.23.0
+tqdm>=4.66.0
+# Required only if you enable the ONNX pLitterStreet model (plitter_street_yolov5l).
+onnxruntime>=1.17.0
