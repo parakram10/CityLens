@@ -27,7 +27,9 @@ document.getElementById('backToLogin').onclick=e=>{ e.preventDefault();
   document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('active',x.dataset.tab==='login'));
 };
 document.getElementById('su-role').onchange=e=>{
-  document.getElementById('su-wardfield').style.display= e.target.value==='ward_officer'?'flex':'none';
+  const role=e.target.value;
+  document.getElementById('su-wardfield').style.display= (role==='ward_officer'||role==='crew')?'flex':'none';
+  document.getElementById('su-specialismfield').style.display= role==='crew'?'flex':'none';
 };
 
 document.getElementById('loginForm').onsubmit=async e=>{
@@ -47,7 +49,8 @@ document.getElementById('signupForm').onsubmit=async e=>{
       mobile:document.getElementById('su-mobile').value,
       password:pass,
       role:document.getElementById('su-role').value,
-      ward:document.getElementById('su-ward').value
+      ward:document.getElementById('su-ward').value,
+      specialism:document.getElementById('su-specialism').value
     });
     await login(document.getElementById('su-user').value, pass);
     location.href='index.html';

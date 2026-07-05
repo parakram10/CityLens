@@ -8,19 +8,32 @@ const TYPE = {
 const SEVW = {1:1,2:2,3:3.5,4:5.5,5:8};
 const SEVC = {1:'#8a9099',2:'#3b6fc4',3:'#c98a12',4:'#e56a00',5:'#d32f2f'};
 const OPEN = new Set(['confirmed','reported','candidate']);
+const NOW = new Date(DATA.generated);       // fixed "now" for the demo — real Date() would drift from the seeded historical dates
 const fmtDate = s => new Date(s).toLocaleDateString('en-IN',{day:'numeric',month:'short'});
 const fmtDT = s => new Date(s).toLocaleString('en-IN',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});
+const daysOpen = i => Math.floor((NOW-new Date(i.first_seen))/864e5);
+const resolutionDays = i => Math.floor((new Date(i.last_seen)-new Date(i.first_seen))/864e5);
 const issues = DATA.issues;                 // mutable — resolve/verify write here
 const wardsFC = DATA.wards;
 
 /* ---------- field crew (one specialism each) ---------- */
 // CREW / CREW_CAPACITY come from js/data.js, loaded before this file.
-(function assignCrew(){ // deterministic round-robin per category, respecting capacity — every issue gets a responsible crew member while room lasts
+function issueHash(id){ // stable pseudo-random per id (FNV-1a + finalizer, for a well-mixed 0..1 split that looks the same on every reload)
+  let h=2166136261;
+  for(const ch of id){ h^=ch.charCodeAt(0); h=Math.imul(h,16777619); }
+  h^=h>>>16; h=Math.imul(h,0x85ebca6b); h^=h>>>13; h=Math.imul(h,0xc2b2ae35); h^=h>>>16;
+  return (h>>>0)/4294967296;
+}
+(function assignCrew(){ // deterministic round-robin per category, respecting capacity — closed issues always show a contractor; only a minority of open issues come pre-assigned so the rest can be assigned live in a demo
   const idx={}, openLoad={};
+  const OPEN_ASSIGN_RATE=0.2;
   issues.forEach(i=>{
+    if(i.type==='waterlogging') return;
+    if(WARD_CREW[i.ward] && crewById(WARD_CREW[i.ward])){ i.crew=WARD_CREW[i.ward]; return; } // ward contractor takes the whole ward, any type
+    const isOpen=OPEN.has(i.status);
+    if(isOpen && issueHash(i.id)>=OPEN_ASSIGN_RATE) return;  // leave most open issues unassigned for the demo
     const pool=CREW.filter(c=>c.type===i.type); if(!pool.length)return;
     idx[i.type]=idx[i.type]||0;
-    const isOpen=OPEN.has(i.status);
     let pick=null;
     for(let tries=0;tries<pool.length;tries++){
       const cand=pool[idx[i.type]%pool.length]; idx[i.type]++;
@@ -39,10 +52,15 @@ function crewLoad(){
     return {...c, total:mine.length, open:mine.filter(i=>OPEN.has(i.status)).length};
   });
 }
-function nextCrewId(){
-  const used=new Set(CREW.map(c=>c.id)); let n=1;
-  while(used.has('CR-'+String(n).padStart(2,'0')))n++;
-  return 'CR-'+String(n).padStart(2,'0');
+function assignWardToCrew(ward,crewId){ // hand the whole ward's repairable backlog to one contractor, any issue type
+  WARD_CREW[ward]=crewId;
+  saveWardCrew(WARD_CREW);
+  issues.forEach(i=>{ if(i.ward===ward && i.type!=='waterlogging') i.crew=crewId; });
+  Object.assign(SCORES, wardScores());
+}
+function unassignWardCrew(ward){
+  delete WARD_CREW[ward];
+  saveWardCrew(WARD_CREW);
 }
 function removeCrew(id){
   const idx=CREW.findIndex(c=>c.id===id); if(idx<0)return;
@@ -88,7 +106,7 @@ function cityScore(){const v=Object.values(SCORES); let tot=0,wt=0; v.forEach(w=
 function priority(i){ return SEVW[i.severity]*Math.log2(1+i.passes); }
 
 /* ---------- app state + router ---------- */
-let state={view:'city',ward:null,street:null,type:null};
+let state={view:'city',ward:null,street:null,type:null,assignFilter:'all',bus:null,trip:null};
 let map=null, layers=null;
 
 function setActive(){
@@ -100,12 +118,16 @@ function setActive(){
 function counts(){
   const open=issues.filter(i=>OPEN.has(i.status));
   document.getElementById('ct-city').textContent=open.length;
+  document.getElementById('ct-wards').textContent=wardsFC.features.length;
   document.getElementById('ct-bus').textContent=DATA.buses.length;
   document.getElementById('ct-crew').textContent=CREW.length;
+  document.getElementById('ct-performance').textContent=issues.filter(i=>i.type!=='waterlogging'&&OPEN.has(i.status)&&daysOpen(i)>7).length;
+  const session=getSession(), cm=session&&session.role==='crew'?crewById(session.crewId):null;
+  document.getElementById('ct-mywork').textContent=cm?crewOpenCount(cm.id):'';
   Object.keys(TYPE).forEach(t=>{const e=document.getElementById('ct-'+t); if(e)e.textContent=open.filter(i=>i.type===t).length;});
   document.getElementById('sensing-n').textContent=DATA.buses.length+' buses sensing';
   const passes=issues.reduce((a,i)=>a+i.passes,0);
-  document.getElementById('sensing-sub').textContent=passes.toLocaleString('en-IN')+' passes logged today';
+  document.getElementById('sensing-sub').textContent=passes.toLocaleString('en-IN')+' passes logged this survey';
   const cs=cityScore(); const chip=document.querySelector('#scorechip .v');
   chip.textContent=cs; chip.style.background=scoreColor(cs);
 }
@@ -122,9 +144,13 @@ function newMap(id){
   L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',{maxZoom:19,subdomains:'abcd'}).addTo(m);
   return m;
 }
-function markerFor(i){
+function addRouteOverlay(m){ // the fixed A-71 demo route — only drawn on the Fleet trip-replay map, exactly as it was originally
+  return L.polyline(DATA.routes['A-71'],{color:'#3b6fc4',weight:4,opacity:.6}).addTo(m);
+}
+function markerFor(i){ return markerAt(i,[i.lat,i.lon]); }
+function markerAt(i,pos){
   const r=3+i.severity*1.4;
-  return L.circleMarker([i.lat,i.lon],{radius:r,fillColor:TYPE[i.type].c,color:'#fff',weight:1.4,
+  return L.circleMarker(pos,{radius:r,fillColor:TYPE[i.type].c,color:'#fff',weight:1.4,
     fillOpacity:i.status==='candidate'?0.4:0.9, dashArray:i.status==='candidate'?'2':null})
     .on('click',()=>openIssue(i.id));
 }
@@ -139,6 +165,12 @@ function drawWards(m,{fillByScore=false,only=null,onclick=null}={}){
   }).addTo(m);
 }
 function plot(m,list){ list.forEach(i=>markerFor(i).addTo(m)); }
+function haversineKm(a,b){
+  const R=6371, toRad=d=>d*Math.PI/180;
+  const dLat=toRad(b[0]-a[0]), dLon=toRad(b[1]-a[1]);
+  const s=Math.sin(dLat/2)**2+Math.cos(toRad(a[0]))*Math.cos(toRad(b[0]))*Math.sin(dLon/2)**2;
+  return 2*R*Math.asin(Math.sqrt(s));
+}
 
 /* ---------- views ---------- */
 function render(){
@@ -146,7 +178,7 @@ function render(){
   if(session && session.role==='ward_officer' && state.view==='ward'){ state.ward=session.ward; }
   setActive(); counts();
   const c=document.getElementById('content'); c.innerHTML='';
-  ({city:viewCity,wards:viewWards,ward:viewWard,street:viewStreet,fleet:viewFleet,cat:viewCat,crew:viewCrew})[state.view]();
+  ({city:viewCity,wards:viewWards,ward:viewWard,street:viewStreet,fleet:viewFleet,cat:viewCat,crew:viewCrew,performance:viewPerformance,mywork:viewMyWork})[state.view]();
 }
 
 function kpiStrip(list){
@@ -199,16 +231,18 @@ function viewCity(){
 
 function viewWards(){
   document.getElementById('h-title').textContent='Wards';
-  document.getElementById('h-sub').textContent='24 BMC administrative wards — pick your area of responsibility.';
+  document.getElementById('h-sub').textContent=`${wardsFC.features.length} BMC administrative wards — pick your area of responsibility.`;
   crumb([{t:'Mumbai',go:()=>{state.view='city';render();}},{t:'Wards'}]);
   const board=Object.values(SCORES).sort((a,b)=>a.score-b.score);
   document.getElementById('content').innerHTML=`<div class="card"><div class="ch"><h3>All wards</h3><span class="r">click to open the ward officer view</span></div>
-    <table><thead><tr><th></th><th>Ward</th><th>Area</th><th>Health</th><th>Open</th><th>High sev</th><th>Fixed</th></tr></thead><tbody>
+    <table><thead><tr><th></th><th>Ward</th><th>Area</th><th>Health</th><th>Open</th><th>High sev</th><th>Fixed</th><th>Contractor</th></tr></thead><tbody>
     ${board.map((w,i)=>{const wi=issues.filter(x=>x.ward===w.ward);
       const hs=wi.filter(x=>OPEN.has(x.status)&&x.severity>=4).length; const fx=wi.filter(x=>x.status==='verified_fixed').length;
+      const contractor=WARD_CREW[w.ward]&&crewById(WARD_CREW[w.ward]);
       return `<tr class="clk" data-w="${w.ward}"><td class="rank">${i+1}</td><td><b>${w.ward}</b></td><td>${w.area}</td>
       <td><span class="scorepill" style="background:${scoreColor(w.score)}">${w.score}</span></td><td>${w.open}</td>
-      <td style="color:var(--pothole);font-weight:700">${hs}</td><td style="color:var(--good);font-weight:700">${fx}</td></tr>`;}).join('')}
+      <td style="color:var(--pothole);font-weight:700">${hs}</td><td style="color:var(--good);font-weight:700">${fx}</td>
+      <td>${contractor?contractor.name:'<span style="color:var(--faint)">—</span>'}</td></tr>`;}).join('')}
     </tbody></table></div>`;
   document.querySelectorAll('tr[data-w]').forEach(tr=>tr.onclick=()=>{state.ward=tr.dataset.w;state.view='ward';render();});
 }
@@ -221,20 +255,93 @@ function viewWard(){
   if(session && session.role==='ward_officer'){ crumb([{t:'Ward '+w.ward}]); }
   else crumb([{t:'Mumbai',go:()=>{state.view='city';render();}},{t:'Wards',go:()=>{state.view='wards';render();}},{t:'Ward '+w.ward}]);
   const open=list.filter(i=>OPEN.has(i.status)).sort((a,b)=>priority(b)-priority(a));
+  const showAssignFilter=session?.role!=='crew';
+  const assignable=open.filter(i=>i.type!=='waterlogging');
+  const assignedN=assignable.filter(i=>i.crew).length, unassignedN=assignable.length-assignedN;
+  const filter=showAssignFilter?(state.assignFilter||'all'):'all';
+  const filtered=filter==='assigned'?assignable.filter(i=>i.crew)
+    :filter==='unassigned'?assignable.filter(i=>!i.crew)
+    :open;
   const c=document.getElementById('content');
+  const contractorId=WARD_CREW[w.ward], contractor=contractorId&&crewById(contractorId);
+  const canManage=session && (session.role==='admin' || session.role==='ward_officer');
+  const streets=DATA.streets.filter(s=>s.wardId===state.ward).map(s=>{
+    const li=issues.filter(i=>i.streetId===s.id); const sOpen=li.filter(i=>OPEN.has(i.status));
+    return {...s,total:li.length,open:sOpen.length,load:sOpen.reduce((a,i)=>a+SEVW[i.severity],0)};
+  }).sort((a,b)=>b.load-a.load);
   c.innerHTML = kpiStrip(list) + `
+    <div class="card"><div class="ch"><h3>Ward contractor</h3><span class="r">one crew responsible for every repairable issue in Ward ${w.ward}</span></div>
+      <div class="cb" style="display:flex;align-items:center;gap:14px;padding:12px 16px">
+        ${contractor?`<span class="badge assigned">${contractor.name} · ${contractor.id}</span>`:'<span class="badge unassigned">No ward contractor</span>'}
+        ${canManage?`<button class="btn primary sm" id="wardAssignBtn">${contractor?'Change contractor':'Assign contractor'}</button>${contractor?'<button class="btn sm danger" id="wardUnassignBtn">Remove</button>':''}`:''}
+      </div>
+    </div>
+    <div class="card"><div class="ch"><h3>Streets & corridors in Ward ${w.ward}</h3><span class="r">click a corridor for its full issue list</span></div>
+      <table><thead><tr><th>Corridor</th><th>Open</th><th>Load</th></tr></thead>
+      <tbody>${streets.slice(0,3).map(streetRow).join('')}</tbody>
+      <tbody id="streetsMore" style="display:none">${streets.slice(3).map(streetRow).join('')}</tbody>
+      </table>
+      ${streets.length>3?`<div style="padding:10px 16px"><button class="btn sm" id="streetsToggle">View ${streets.length-3} more corridors</button></div>`:''}
+    </div>
     <div class="row map-side">
-      <div class="card"><div class="ch"><h3>Resolution queue</h3><span class="r">${open.length} open · severity × persistence</span></div>
+      <div class="card"><div class="ch"><h3>Resolution queue</h3><span class="r">${filtered.length} of ${open.length} open · severity × persistence</span></div>
+        ${showAssignFilter?`<div style="display:flex;gap:6px;padding:10px 16px;border-bottom:1px solid var(--line)">
+          <button class="btn sm ${filter==='all'?'primary':''}" data-filter="all">All (${open.length})</button>
+          <button class="btn sm ${filter==='assigned'?'primary':''}" data-filter="assigned">Assigned (${assignedN})</button>
+          <button class="btn sm ${filter==='unassigned'?'primary':''}" data-filter="unassigned">Unassigned (${unassignedN})</button>
+        </div>`:''}
         <div style="max-height:452px;overflow-y:auto" id="queue"></div></div>
       <div class="card"><div class="ch"><h3>Ward ${w.ward}</h3><span class="r">health ${w.score}</span></div><div id="wardmap"></div></div>
     </div>`;
   const q=c.querySelector('#queue');
-  if(!open.length) q.innerHTML='<div class="hint">No open issues in this ward. All clear.</div>';
-  open.forEach(i=>q.appendChild(qItem(i)));
+  if(!filtered.length) q.innerHTML=`<div class="hint">${open.length?'No issues match this filter.':'No open issues in this ward. All clear.'}</div>`;
+  filtered.forEach(i=>q.appendChild(qItem(i)));
+  if(showAssignFilter) c.querySelectorAll('button[data-filter]').forEach(btn=>btn.onclick=()=>{state.assignFilter=btn.dataset.filter;render();});
+  c.querySelectorAll('tr[data-s]').forEach(tr=>tr.onclick=()=>{state.street=tr.dataset.s;state.view='street';render();});
+  const streetsToggle=document.getElementById('streetsToggle');
+  if(streetsToggle) streetsToggle.onclick=()=>{
+    const more=document.getElementById('streetsMore'); const hidden=more.style.display==='none';
+    more.style.display=hidden?'':'none';
+    streetsToggle.textContent=hidden?'Show fewer corridors':`View ${streets.length-3} more corridors`;
+  };
   const wm=L.map('wardmap',{zoomControl:true,attributionControl:false});
   L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',{subdomains:'abcd'}).addTo(wm);
   const wl=drawWards(wm,{only:state.ward}); wm.fitBounds(wl.getBounds(),{padding:[20,20]});
   plot(wm,list);
+  if(canManage){
+    document.getElementById('wardAssignBtn').onclick=()=>openAssignWardCrew(w.ward);
+    const ub=document.getElementById('wardUnassignBtn');
+    if(ub)ub.onclick=()=>{ if(confirm(`Remove ${contractor.name} as contractor for Ward ${w.ward}? Existing assignments stay as-is; new issues fall back to per-type assignment.`)){ unassignWardCrew(w.ward); render(); } };
+  }
+}
+function openAssignWardCrew(ward){
+  const w=SCORES[ward];
+  const m=document.getElementById('crewModal'), s=document.getElementById('scrim');
+  m.innerHTML=`<div class="mh"><div><b style="font-size:15px">Assign ward contractor</b>
+      <div style="font-size:12px;color:var(--faint)">Ward ${ward} · ${w.area} — every repairable issue in the ward goes to this crew</div></div>
+      <button class="x" id="cx">×</button></div>
+    <div class="mb" style="padding:6px 0">
+      <table><thead><tr><th>Crew ID</th><th>Name</th><th>Specialism</th><th>Open load</th><th></th></tr></thead><tbody>
+        ${CREW.map(cm=>{
+          const open=crewOpenCount(cm.id);
+          const current=WARD_CREW[ward]===cm.id;
+          return `<tr><td>${cm.id}</td><td>${cm.name}</td><td>${TYPE[cm.type].label}</td>
+            <td><span class="scorepill" style="background:${open>=CREW_CAPACITY?'#d32f2f':open?'#e56a00':'#2e7d32'}">${open}/${CREW_CAPACITY}</span></td>
+            <td><button class="btn ${current?'good':'primary'} sm" data-assign="${cm.id}">${current?'Assigned ✓':'Assign'}</button></td></tr>`;
+        }).join('')}
+      </tbody></table>
+    </div>`;
+  document.getElementById('cx').onclick=closeDrawer; s.onclick=closeDrawer;
+  m.querySelectorAll('button[data-assign]').forEach(btn=>btn.onclick=()=>{
+    assignWardToCrew(ward,btn.dataset.assign);
+    closeDrawer(); render();
+  });
+  m.classList.add('on');
+}
+
+function streetRow(s){
+  return `<tr class="clk" data-s="${s.id}"><td><b>${s.name}</b></td><td>${s.open}</td>
+    <td><span class="scorepill" style="background:${s.load>18?'#d32f2f':s.load>10?'#e56a00':'#c98a12'}">${s.load.toFixed(0)}</span></td></tr>`;
 }
 
 function qItem(i,opts={}){
@@ -243,40 +350,117 @@ function qItem(i,opts={}){
     <div class="meta"><div class="t1">${TYPE[i.type].label}
       <span class="sev" style="background:${SEVC[i.severity]}">SEV ${i.severity}</span>
       <span class="badge ${i.status}">${i.status.replace('_',' ')}</span>
-      ${i.type!=='waterlogging'?`<span class="badge ${i.crew?'assigned':'unassigned'}">${i.crew?'Assigned':'Unassigned'}</span>`:''}</div>
-      <div class="t2">${i.street} · ${i.id} · ${i.passes} passes · ${Math.round(i.confidence*100)}% conf</div></div>
+      ${(i.type!=='waterlogging'&&getSession()?.role!=='crew')?`<span class="badge ${i.crew?'assigned':'unassigned'}">${i.crew?'Assigned':'Unassigned'}</span>`:''}</div>
+      <div class="t2">${i.street} · ${i.id} · ${i.passes} passes · ${Math.round(i.confidence*100)}% conf · ${i.route} · ${i.bus}</div></div>
     <div class="pri">P ${priority(i).toFixed(1)}</div>`;
   el.onclick=()=>openIssue(i.id,opts); return el;
 }
 
 function viewStreet(){
   state.street=state.street||null;
+  const scopedWard=state.ward;
+  const allStreets=scopedWard?DATA.streets.filter(s=>s.wardId===scopedWard):DATA.streets;
   document.getElementById('h-title').textContent='Streets & corridors';
-  document.getElementById('h-sub').textContent='Issues aggregated along a road segment.';
-  crumb([{t:'Mumbai',go:()=>{state.view='city';render();}},{t:'Streets'}]);
-  const streets=[...new Set(issues.map(i=>i.street))].map(s=>{
-    const li=issues.filter(i=>i.street===s); const open=li.filter(i=>OPEN.has(i.status));
-    return {s,total:li.length,open:open.length,load:open.reduce((a,i)=>a+SEVW[i.severity],0)};
+  document.getElementById('h-sub').textContent=scopedWard
+    ?`${allStreets.length} corridors in Ward ${scopedWard} — issues aggregated along each road segment.`
+    :`${allStreets.length} corridors across ${wardsFC.features.length} wards — issues aggregated along each road segment.`;
+  crumb(scopedWard
+    ?[{t:'Mumbai',go:()=>{state.view='city';render();}},{t:'Ward '+scopedWard,go:()=>{state.view='ward';render();}},{t:'Streets'}]
+    :[{t:'Mumbai',go:()=>{state.view='city';render();}},{t:'Streets'}]);
+  const streets=allStreets.map(s=>{
+    const li=issues.filter(i=>i.streetId===s.id); const open=li.filter(i=>OPEN.has(i.status));
+    return {...s,total:li.length,open:open.length,load:open.reduce((a,i)=>a+SEVW[i.severity],0)};
   }).sort((a,b)=>b.load-a.load);
-  const sel=state.street||streets[0].s;
-  const list=issues.filter(i=>i.street===sel);
+  const sel=streets.find(s=>s.id===state.street) || streets[0];
+  const list=issues.filter(i=>i.streetId===sel.id);
   const c=document.getElementById('content');
   c.innerHTML=`<div class="row map-side">
-    <div class="card"><div class="ch"><h3>${sel}</h3><span class="r">${list.length} detections along corridor</span></div>
+    <div class="card"><div class="ch"><h3>${sel.name} <span style="font-weight:600;color:var(--muted);font-size:15px">· Ward ${sel.wardId}</span></h3><span class="r">${list.length} detections along corridor</span></div>
       <div id="streetmap"></div>
       <div class="legend">${Object.entries(TYPE).map(([k,v])=>`<span class="it"><span class="sw" style="background:${v.c}"></span>${v.label}</span>`).join('')}</div></div>
     <div class="card"><div class="ch"><h3>Corridors by open load</h3><span class="r">worst first</span></div>
-      <div style="max-height:512px;overflow-y:auto"><table><thead><tr><th>Street</th><th>Open</th><th>Load</th></tr></thead><tbody>
-      ${streets.map(x=>`<tr class="clk" data-s="${x.s}"><td><b>${x.s}</b></td><td>${x.open}</td>
+      <div style="max-height:512px;overflow-y:auto"><table><thead><tr><th>Street</th><th>Ward</th><th>Open</th><th>Load</th></tr></thead><tbody>
+      ${streets.map(x=>`<tr class="clk ${x.id===sel.id?'sel':''}" data-s="${x.id}"><td><b>${x.name}</b></td><td>${x.wardId}</td><td>${x.open}</td>
         <td><span class="scorepill" style="background:${x.load>18?'#d32f2f':x.load>10?'#e56a00':'#c98a12'}">${x.load.toFixed(0)}</span></td></tr>`).join('')}
-      </tbody></table></div></div></div>`;
+      </tbody></table></div></div>
+  </div>
+  <div class="card"><div class="ch"><h3>All issues on ${sel.name}</h3><span class="r">${list.length} total · every status</span></div>
+    <div style="max-height:452px;overflow-y:auto" id="streetQueue"></div></div>
+  <div class="card"><div class="ch"><h3>Fleet coverage</h3><span class="r">buses that have surveyed this corridor — click a trip to replay it</span></div>
+    ${(()=>{const trips=tripsForStreet(sel.id); return trips.length
+      ?`<table><thead><tr><th>Bus</th><th>Trip date</th><th>Detections here</th></tr></thead><tbody>
+        ${trips.map(t=>`<tr class="clk" data-bus="${t.bus}" data-trip="${t.id}"><td><b>${t.bus}</b></td><td>${fmtDate(t.date)}</td><td>${t.detections}</td></tr>`).join('')}
+        </tbody></table>`
+      :'<div class="hint" style="padding:12px 16px">No fleet passes logged on this corridor yet.</div>';})()}
+  </div>`;
   const sm=L.map('streetmap',{zoomControl:true,attributionControl:false});
   L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',{subdomains:'abcd'}).addTo(sm);
   plot(sm,list);
   if(list.length){const g=L.featureGroup(list.map(i=>L.marker([i.lat,i.lon]))); sm.fitBounds(g.getBounds().pad(0.3));}
+  const sq=c.querySelector('#streetQueue');
+  if(!list.length) sq.innerHTML='<div class="hint">No issues detected on this corridor yet.</div>';
+  list.slice().sort((a,b)=>priority(b)-priority(a)).forEach(i=>sq.appendChild(qItem(i)));
   c.querySelectorAll('tr[data-s]').forEach(tr=>tr.onclick=()=>{state.street=tr.dataset.s;render();});
+  c.querySelectorAll('tr[data-bus]').forEach(tr=>tr.onclick=()=>{
+    state.view='fleet'; state.bus=tr.dataset.bus; state.trip=tr.dataset.trip; render();
+  });
+}
+function tripsForStreet(streetId){ // which bus+trip pairs actually detected something on this corridor — the corridor-to-fleet link
+  const byKey={};
+  issues.filter(i=>i.streetId===streetId).forEach(i=>{
+    (i.history||[]).forEach(h=>{
+      const date=h.t.slice(0,10), id=date+'|'+i.ward, key=h.bus+'|'+id;
+      (byKey[key]=byKey[key]||{bus:h.bus,date,id,issueIds:new Set()}).issueIds.add(i.id);
+    });
+  });
+  return Object.values(byKey).map(x=>({bus:x.bus,date:x.date,id:x.id,detections:x.issueIds.size}))
+    .sort((a,b)=>b.date.localeCompare(a.date));
 }
 
+function contractorName(i){ return i.crew?crewById(i.crew).name:'Unassigned'; }
+function crewPerformanceNote(i){          // per-issue callout — recognize fast fixes, flag stale backlog, say nothing in between
+  if(i.type==='waterlogging') return '';
+  if(i.status==='resolved'||i.status==='verified_fixed'){
+    const days=resolutionDays(i);
+    if(days<=3) return `<div class="hint" style="background:var(--good-bg);color:var(--good);border-radius:10px;padding:10px 14px;margin:14px 0;font-weight:700">🎉 Fixed in ${days<=0?'under a day':days+'d'} by ${contractorName(i)} — fast turnaround, nice work.</div>`;
+    return '';
+  }
+  if(OPEN.has(i.status) && daysOpen(i)>7){
+    return `<div class="hint" style="background:var(--bad-bg);color:var(--pothole);border-radius:10px;padding:10px 14px;margin:14px 0;font-weight:700">⏳ Open ${daysOpen(i)} days, unresolved — logged as a miss for ${contractorName(i)}.</div>`;
+  }
+  return '';
+}
+function viewPerformance(){
+  state.ward=state.street=state.type=null;
+  document.getElementById('h-title').textContent='Performance';
+  document.getElementById('h-sub').textContent='Fast fixes worth recognizing, and issues that have sat open too long — same confirmed-issue set, both sides of the story.';
+  crumb([{t:'Mumbai',go:()=>{state.view='city';render();}},{t:'Performance'}]);
+  const repairable=issues.filter(i=>i.type!=='waterlogging');
+  const praise=repairable.filter(i=>(i.status==='resolved'||i.status==='verified_fixed')&&resolutionDays(i)<=3)
+    .sort((a,b)=>resolutionDays(a)-resolutionDays(b));
+  const misses=repairable.filter(i=>OPEN.has(i.status)&&daysOpen(i)>7)
+    .sort((a,b)=>daysOpen(b)-daysOpen(a));
+  const c=document.getElementById('content');
+  c.innerHTML=`<div class="row" style="grid-template-columns:1fr 1fr">
+    <div class="card">
+      <div class="ch"><h3>🎉 Praise</h3><span class="r">${praise.length} fixed in ≤3 days</span></div>
+      ${praise.length?`<table><thead><tr><th>Location</th><th>Ward</th><th>Fixed in</th><th>Contractor</th></tr></thead><tbody>
+        ${praise.slice(0,25).map(i=>`<tr class="clk" data-open="${i.id}"><td><span class="tdot" style="background:${TYPE[i.type].c};margin-right:6px"></span>${i.street} · ${i.id}</td>
+          <td>${i.ward}</td><td>${resolutionDays(i)<=0?'<1d':resolutionDays(i)+'d'}</td><td><span class="badge assigned">${contractorName(i)}</span></td></tr>`).join('')}
+        </tbody></table>${praise.length>25?`<div class="hint">+${praise.length-25} more fast fixes</div>`:''}`
+        :`<div class="cb"><div class="hint" style="padding:4px">No fast fixes yet on this run.</div></div>`}
+    </div>
+    <div class="card">
+      <div class="ch"><h3>⏳ Misses</h3><span class="r">${misses.length} open 7+ days</span></div>
+      ${misses.length?`<table><thead><tr><th>Location</th><th>Ward</th><th>Days open</th><th>Contractor</th></tr></thead><tbody>
+        ${misses.slice(0,25).map(i=>`<tr class="clk" data-open="${i.id}"><td><span class="tdot" style="background:${TYPE[i.type].c};margin-right:6px"></span>${i.street} · ${i.id}</td>
+          <td>${i.ward}</td><td>${daysOpen(i)}d</td><td><span class="badge shame">${contractorName(i)}</span></td></tr>`).join('')}
+        </tbody></table>${misses.length>25?`<div class="hint">+${misses.length-25} more overdue</div>`:''}`
+        :`<div class="cb"><div class="hint" style="padding:4px">Nothing has gone unresolved for more than a week — clean sweep.</div></div>`}
+    </div>
+  </div>`;
+  c.querySelectorAll('tr[data-open]').forEach(tr=>tr.onclick=()=>openIssue(tr.dataset.open));
+}
 function viewCat(){
   const t=state.type; const list=issues.filter(i=>i.type===t);
   document.getElementById('h-title').textContent=TYPE[t].label+' — city-wide';
@@ -304,10 +488,11 @@ function viewCrew(){
   const c=document.getElementById('content');
   c.innerHTML=`<div class="card"><div class="ch"><h3>Crew roster</h3><span class="r">${CREW.length} members · click a member to see their worklist</span>
       ${canManage?'<button class="btn primary sm" id="addCrewBtn">+ Add crew member</button>':''}</div>
-    <table><thead><tr><th></th><th>Crew ID</th><th>Name</th><th>Specialism</th><th>Assigned</th><th>Completed</th><th></th></tr></thead><tbody>
+    <table><thead><tr><th></th><th>Crew ID</th><th>Name</th><th>Specialism</th><th>Ward</th><th>Assigned</th><th>Completed</th><th></th></tr></thead><tbody>
     ${rows.map((cm,i)=>`<tr class="clk" data-crew="${cm.id}"><td class="rank">${i+1}</td>
       <td><b>${cm.id}</b></td><td>${cm.name}</td>
       <td><span class="tdot" style="background:${TYPE[cm.type].c};display:inline-block;margin-right:6px;vertical-align:middle"></span>${TYPE[cm.type].label}</td>
+      <td>${cm.ward?'Ward '+cm.ward:'—'}</td>
       <td><span class="scorepill" style="background:${cm.open>=CREW_CAPACITY?'#d32f2f':cm.open?'#e56a00':'#2e7d32'}">${cm.open}/${CREW_CAPACITY}</span>${cm.open>=CREW_CAPACITY?' <span class="badge confirmed" style="margin-left:6px">full</span>':''}</td>
       <td>${cm.total-cm.open}</td>
       <td>${canManage?`<button class="btn sm danger" data-remove="${cm.id}">Remove</button>`:''}</td></tr>`).join('')}
@@ -338,12 +523,39 @@ function openCrew(id){
       ${done.length?`<div class="section-t" style="margin:18px 16px 6px">Completed — ${done.length}</div><div id="crewDone"></div>`:''}
     </div>`;
   const q=m.querySelector('#crewQueue');
-  if(!open.length) q.innerHTML='<div class="hint">No open tasks — worklist clear.</div>';
+  if(!open.length) q.innerHTML='<div class="hint">No issue assigned.</div>';
   open.forEach(i=>q.appendChild(qItem(i,{hideAssign:true})));
   const dq=m.querySelector('#crewDone');
   if(dq) done.forEach(i=>dq.appendChild(qItem(i,{hideAssign:true})));
   document.getElementById('cx').onclick=closeDrawer; s.onclick=closeDrawer;
   s.classList.add('on'); m.classList.add('on');
+}
+function viewMyWork(){
+  state.ward=state.street=state.type=null;
+  const session=getSession();
+  const cm=session&&crewById(session.crewId);
+  document.getElementById('h-title').textContent='My work';
+  crumb([{t:'My work'}]);
+  const c=document.getElementById('content');
+  if(!cm){
+    document.getElementById('h-sub').textContent='Your account isn\'t linked to a crew record.';
+    c.innerHTML='<div class="card cb"><div class="hint" style="padding:4px">No matching crew record — ask an admin to check your account.</div></div>';
+    return;
+  }
+  document.getElementById('h-sub').textContent=`${cm.name} · ${TYPE[cm.type].label} specialist${cm.ward?' · Ward '+cm.ward:''} · your resolution queue and history.`;
+  const mine=issues.filter(i=>i.crew===cm.id);
+  const open=mine.filter(i=>OPEN.has(i.status)).sort((a,b)=>priority(b)-priority(a));
+  const done=mine.filter(i=>!OPEN.has(i.status));
+  c.innerHTML=`<div class="card"><div class="ch"><h3>${cm.name}</h3><span class="r">${cm.id} · ${TYPE[cm.type].label} specialist${cm.ward?' · Ward '+cm.ward:''}</span></div>
+    <div class="section-t" style="margin:14px 16px 6px">Assigned to you — ${open.length}/${CREW_CAPACITY} open${open.length>=CREW_CAPACITY?' <span class="badge confirmed" style="text-transform:none;letter-spacing:0">worklist full</span>':''}</div>
+    <div id="myQueue"></div>
+    ${done.length?`<div class="section-t" style="margin:18px 16px 6px">Completed — ${done.length}</div><div id="myDone"></div>`:''}
+  </div>`;
+  const q=c.querySelector('#myQueue');
+  if(!open.length) q.innerHTML='<div class="hint">No issue assigned.</div>';
+  open.forEach(i=>q.appendChild(qItem(i,{hideAssign:true})));
+  const dq=c.querySelector('#myDone');
+  if(dq) done.forEach(i=>dq.appendChild(qItem(i,{hideAssign:true})));
 }
 function openAddCrew(){
   const id=nextCrewId();
@@ -377,22 +589,98 @@ function openAddCrew(){
 
 /* ---------- fleet + replay ---------- */
 let replay={timer:null,t:0,seen:new Set()};
+function tripsForBus(busId){ // derives real trips from issue history — every detection pass by this bus, grouped by calendar day AND ward (a bus doesn't hop across the city in one run)
+  const byKey={};
+  issues.forEach(i=>{
+    (i.history||[]).forEach(h=>{
+      if(h.bus!==busId) return;
+      const date=h.t.slice(0,10), key=date+'|'+i.ward;
+      (byKey[key]=byKey[key]||{date,ward:i.ward,hits:[]}).hits.push({t:h.t,issue:i});
+    });
+  });
+  return Object.entries(byKey).map(([key,trip])=>{
+    trip.hits.sort((a,b)=>a.t.localeCompare(b.t));
+    const seen=new Set(), stops=[];
+    trip.hits.forEach(h=>{ if(!seen.has(h.issue.id)){ seen.add(h.issue.id); stops.push(h.issue); } });
+    return {id:key,date:trip.date,stops,wards:[trip.ward],detections:trip.hits.length};
+  }).sort((a,b)=>b.date.localeCompare(a.date));
+}
+
+// Real output from civic_issue_detector, loaded async. Expects detections.json (and,
+// alongside it, annotated.mp4 + the crops/ folder from the SAME run) at the project root —
+// see FINETUNING.md / README.md for how a run's output folder is laid out. When present, it
+// drives the trip replay below instead of the simulated mock timeline.
+let LIVE=null;
+fetch('detections.json').then(r=>r.ok?r.json():Promise.reject(new Error('no detections.json'))).then(d=>{
+  LIVE=d;
+  if(state.view==='fleet') render();
+}).catch(()=>{ LIVE=null; });
+
+function mapDetectorType(t){ // civic_issue_detector issue_type -> this app's issue type keys
+  return ({garbage:'garbage_pile', roadside_litter:'garbage_pile', garbage_pile:'garbage_pile',
+    pothole:'pothole', open_drain:'street_obstruction', manhole:'street_obstruction',
+    waterlogging:'waterlogging'})[t] || 'street_obstruction';
+}
+function liveIssues(){ // LIVE.issues -> shape the feed/map code needs, sorted by first appearance
+  if(!LIVE || !LIVE.issues) return [];
+  return LIVE.issues.map(x=>({
+    id:x.issue_id, type:mapDetectorType(x.issue_type),
+    confidence:(x.peak_confidence_pct||0)/100,
+    severity:Math.max(1,Math.min(5,Math.round((x.peak_confidence_pct||0)/20))),
+    t:x.first_timestamp_sec||0, crop:x.crop_path||null,
+  })).sort((a,b)=>a.t-b.t);
+}
+
 function viewFleet(){
+  if(state.bus && state.trip) return viewTripReplay();
+  viewFleetList();
+}
+function viewFleetList(){
   document.getElementById('h-title').textContent='Fleet & route replay';
-  document.getElementById('h-sub').textContent='Per-bus contribution, and the survey replayed with detections dropping in sync.';
+  document.getElementById('h-sub').textContent = liveIssues().length
+    ? 'Live detections from the on-bus model — open a trip below to watch the synced replay.'
+    : 'Per-bus contribution — expand a bus to see its logged trips.';
   crumb([{t:'Mumbai',go:()=>{state.view='city';render();}},{t:'Fleet'}]);
   const perBus=DATA.buses.map(b=>{const li=issues.filter(i=>i.bus===b);
-    return {b,total:li.length,open:li.filter(i=>OPEN.has(i.status)).length};}).sort((a,b)=>b.total-a.total);
+    return {b,total:li.length,open:li.filter(i=>OPEN.has(i.status)).length,trips:tripsForBus(b)};}).sort((a,b)=>b.total-a.total);
   const c=document.getElementById('content');
+  c.innerHTML=`<div class="card"><div class="ch"><h3>Fleet contribution</h3><span class="r">${DATA.buses.length} buses · click a bus to expand its trip log</span></div>
+    <table><thead><tr><th></th><th>Bus</th><th>Detections</th><th>Open</th><th>Trips</th></tr></thead>
+    ${perBus.map(x=>`<tbody>
+      <tr class="clk" data-toggle="${x.b}"><td class="chev" id="chev-${x.b}">▸</td><td><b>${x.b}</b></td><td>${x.total}</td><td>${x.open}</td><td>${x.trips.length}</td></tr>
+      <tr id="trips-${x.b}" style="display:none"><td colspan="5" style="padding:10px 0;background:#f0f1f4">
+        ${x.trips.length?`<table><thead><tr><th>Date</th><th>Ward</th><th>Detections</th><th>Stops</th></tr></thead><tbody>
+          ${x.trips.map(t=>`<tr class="clk" data-bus="${x.b}" data-t="${t.id}"><td><b>${fmtDate(t.date)}</b></td><td>${t.wards.join(', ')}</td><td>${t.detections}</td><td>${t.stops.length}</td></tr>`).join('')}
+          </tbody></table>`:'<div class="hint" style="padding:12px 16px">No logged trips for this bus.</div>'}
+      </td></tr>
+    </tbody>`).join('')}
+    </table></div>`;
+  c.querySelectorAll('tr[data-toggle]').forEach(tr=>tr.onclick=()=>{
+    const b=tr.dataset.toggle, row=document.getElementById('trips-'+b), chev=document.getElementById('chev-'+b);
+    const hidden=row.style.display==='none';
+    row.style.display=hidden?'':'none'; chev.textContent=hidden?'▾':'▸';
+  });
+  c.querySelectorAll('tr[data-t]').forEach(tr=>tr.onclick=(e)=>{
+    e.stopPropagation(); state.bus=tr.dataset.bus; state.trip=tr.dataset.t; render();
+  });
+}
+function viewTripReplay(){
+  const trip=tripsForBus(state.bus).find(t=>t.id===state.trip);
+  if(!trip){ state.bus=null; state.trip=null; return viewFleetList(); }
+  document.getElementById('h-title').textContent=state.bus;
+  document.getElementById('h-sub').textContent=`Trip on ${fmtDate(trip.date)} — dashcam replay with detections dropping in sync.`;
+  crumb([{t:'Mumbai',go:()=>{state.view='city';render();}},{t:'Fleet',go:()=>{state.bus=null;state.trip=null;render();}},
+    {t:state.bus,go:()=>{state.bus=null;state.trip=null;render();}},{t:fmtDate(trip.date)}]);
+  const c=document.getElementById('content');
+  const live=liveIssues();
   c.innerHTML=`<div class="row map-side">
     <div class="card">
-      <div class="ch"><h3>Route replay — A-71 (Bandra → Goregaon)</h3><span class="r">bus MH01-BST-2087</span></div>
-      <div class="videoslot" style="position:relative;padding:0;overflow:hidden;background:#12151a">
-        <div class="rd" style="position:absolute;top:8px;left:8px;z-index:2"><span class="d"></span>DASHCAM</div>
-        <video id="dashcam" src="assets/demo.mp4" muted playsinline preload="metadata"
-          style="width:100%;display:block;background:#12151a;max-height:320px;object-fit:contain"></video>
-        <div id="videohint" style="display:none;padding:16px;color:var(--faint);font-size:13px">
-          Drop your clip at <code>assets/demo.mp4</code> — map pins still sync to the route timeline below.</div></div>
+      <div class="ch"><h3>Trip replay — ${fmtDate(trip.date)}</h3><span class="r">bus ${state.bus}</span></div>
+      <div class="videoslot" id="videoslot">
+        ${live.length?`<video id="replayVideo" src="annotated.mp4" muted playsinline style="width:100%;height:100%;object-fit:cover;display:block"></video>`:''}
+        <div class="rd"><span class="d"></span>DASHCAM</div>
+        <div id="videoFallback" style="${live.length?'display:none':''}">Drop your sourced clip here (<code>&lt;video&gt;</code> slot) — map pins already sync to the route timeline below.</div>
+      </div>
       <div id="fleetmap"></div>
       <div class="controls">
         <button class="btn primary sm" id="play">▶ Play</button>
@@ -403,83 +691,153 @@ function viewFleet(){
     </div>
     <div class="card"><div class="ch"><h3>Detections this run</h3><span class="r" id="feedn">0</span></div>
       <div class="feed" id="feed"><div class="hint">Press play — confirmed detections along the route appear here as the bus passes them.</div></div>
-      <div class="ch" style="border-top:1px solid var(--line)"><h3>Fleet contribution</h3></div>
-      <div style="max-height:220px;overflow-y:auto"><table><thead><tr><th>Bus</th><th>Detections</th><th>Open</th></tr></thead><tbody>
-      ${perBus.map(x=>`<tr><td><b>${x.b}</b></td><td>${x.total}</td><td>${x.open}</td></tr>`).join('')}
+      <div class="ch" style="border-top:1px solid var(--line)"><h3>Trip stops</h3></div>
+      <div style="max-height:220px;overflow-y:auto"><table><thead><tr><th>Issue</th><th>Street</th><th>Sev</th></tr></thead><tbody>
+      ${trip.stops.map(i=>`<tr class="clk" data-open="${i.id}"><td><b>${i.id}</b></td>
+        <td><a data-goto-street="${i.streetId}" data-goto-ward="${i.ward}" style="color:var(--chalo-d);text-decoration:underline;cursor:pointer">${i.street}</a></td>
+        <td>${i.severity}</td></tr>`).join('')}
       </tbody></table></div>
     </div></div>`;
+  c.querySelectorAll('tr[data-open]').forEach(tr=>tr.onclick=()=>openIssue(tr.dataset.open));
+  c.querySelectorAll('a[data-goto-street]').forEach(a=>a.onclick=(e)=>{
+    e.stopPropagation();
+    state.view='street'; state.ward=a.dataset.gotoWard; state.street=a.dataset.gotoStreet; render();
+  });
 
+  stopReplay(); replay.t=0; replay.df=0; replay.seen.clear();
   const fm=L.map('fleetmap',{zoomControl:true,attributionControl:false});
   L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',{subdomains:'abcd'}).addTo(fm);
-  const route=DATA.routes['A-71'];
-  const poly=L.polyline(route,{color:'#3b6fc4',weight:4,opacity:.6}).addTo(fm);
+  const route=DATA.routes['A-71']; // same fixed, real road-following route used everywhere — identical mechanics to the original single demo
+  const poly=addRouteOverlay(fm);
   fm.fitBounds(poly.getBounds().pad(0.25));
-  const bus=L.circleMarker(route[0],{radius:8,fillColor:'#f57c00',color:'#fff',weight:2,fillOpacity:1}).addTo(fm);
-  const routeIssues=DATA.replay_ids.map(id=>issues.find(i=>i.id===id)).filter(Boolean);
-  const pinLayer={}; // id -> marker (revealed progressively)
+  const busMarker=L.circleMarker(route[0],{radius:8,fillColor:'#f57c00',color:'#fff',weight:2,fillOpacity:1}).addTo(fm);
+  // Real motion pacing from the backend pipeline (window.CITYLENS_LIVE.motion): the true
+  // distance the clip covers + a cumulative-distance curve, so the km readout and marker
+  // follow the video's actual speed (crawl, stops) instead of a fixed 8.6 km linear sweep.
+  // Falls back to the old behaviour when the motion payload is absent.
+  const __M=(window.CITYLENS_LIVE&&window.CITYLENS_LIVE.motion)||null;
+  const totalKm=(__M&&__M.distance_km)?__M.distance_km:8.6;
+  function cumFrac(sec,dur){ // video time -> distance fraction (0..1) along the real motion curve
+    if(!__M||!__M.cum||!__M.cum.length) return dur?Math.min(1,sec/dur):0;
+    const c=__M.cum;
+    if(sec<=c[0][0]) return c[0][1];
+    if(sec>=c[c.length-1][0]) return c[c.length-1][1];
+    let lo=0,hi=c.length-1;
+    while(lo<hi){const md=(lo+hi)>>1; if(c[md][0]<sec)lo=md+1; else hi=md;}
+    const a=c[Math.max(1,lo)-1], b=c[Math.max(1,lo)];
+    return b[0]<=a[0]?a[1]:a[1]+(b[1]-a[1])*(sec-a[0])/(b[0]-a[0]);
+  }
 
-  function seg(t){ // t in 0..1 -> [lat,lon] along polyline + km
-    const n=route.length-1, x=t*n, i=Math.min(n-1,Math.floor(x)), f=x-i;
-    const a=route[i],b=route[i+1];
+  function posAt(t){ // t in 0..1 -> [lat,lon] along the fixed route
+    const n=route.length-1, x=t*n, idx=Math.min(n-1,Math.floor(x)), f=x-idx;
+    const a=route[idx],b=route[idx+1];
     return [a[0]+(b[0]-a[0])*f, a[1]+(b[1]-a[1])*f];
   }
-  const totalKm=8.6;
-  function applyT(){ // render the route/feed for the current replay.t (0..1)
-    const p=seg(replay.t); bus.setLatLng(p);
-    document.getElementById('fill').style.width=(replay.t*100)+'%';
-    document.getElementById('clock').textContent=(replay.t*totalKm).toFixed(1)+' km';
-    routeIssues.forEach((i,idx)=>{ const at=(idx+1)/(routeIssues.length+1);
-      if(replay.t>=at && !replay.seen.has(i.id)){ replay.seen.add(i.id);
-        markerFor(i).addTo(fm); addFeed(i); }});
+  function fmtClock(sec){ const m=Math.floor(sec/60), s=Math.floor(sec%60); return `${m}:${String(s).padStart(2,'0')}`; }
+  function markerForLive(i){ // no GPS from the detector — drop the pin at the bus's position (km along route) when it fired
+    const km=(replay.df*totalKm).toFixed(1);
+    return L.circleMarker(posAt(replay.df),{radius:3+i.severity*1.4,fillColor:TYPE[i.type].c,color:'#fff',weight:1.4,fillOpacity:.9})
+      .bindPopup(`<b>${TYPE[i.type].label}</b> · ${Math.round(i.confidence*100)}% confidence<br>${fmtClock(i.t)} into clip · ${km} km along route`);
   }
-  function step(){ // timer path (no dashcam clip): advance t ourselves
-    replay.t=Math.min(1,replay.t+0.006);
-    applyT();
-    if(replay.t>=1){stopReplay();}
-  }
-  // Dashcam path: when assets/demo.mp4 loads, playback drives the timeline so the
-  // map bus, distance, and detection feed stay in sync with the video.
-  const video=document.getElementById('dashcam');
-  replay.video=null; replay.videoReady=false;
-  if(video){
-    video.addEventListener('loadedmetadata',()=>{
-      if(video.duration&&isFinite(video.duration)&&video.duration>0){ replay.video=video; replay.videoReady=true; }
-    });
-    video.addEventListener('timeupdate',()=>{
-      if(!replay.videoReady||!video.duration) return;
-      replay.t=Math.min(1, video.currentTime/video.duration); applyT();
-      if(replay.t>=1) stopReplay();
-    });
-    video.addEventListener('error',()=>{ // no clip present — fall back to timer animation
-      replay.video=null; replay.videoReady=false;
-      video.style.display='none';
-      const h=document.getElementById('videohint'); if(h)h.style.display='block';
-    });
-  }
-  function addFeed(i){ const feed=document.getElementById('feed');
+  function addFeedLive(i){
+    const feed=document.getElementById('feed');
     if(replay.seen.size===1)feed.innerHTML='';
+    const km=(replay.df*totalKm).toFixed(1);
     const el=document.createElement('div');el.className='feeditem';
     el.innerHTML=`<span class="tdot" style="background:${TYPE[i.type].c}"></span>
+      ${i.crop?`<img src="${i.crop}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;flex:0 0 36px" onerror="this.remove()">`:''}
       <div class="meta"><div class="t1">${TYPE[i.type].label} <span class="sev" style="background:${SEVC[i.severity]}">SEV ${i.severity}</span></div>
-      <div class="t2">${(replay.t*totalKm).toFixed(1)} km · ${Math.round(i.confidence*100)}% · ${i.id}</div></div>`;
-    el.onclick=()=>openIssue(i.id); feed.prepend(el);
+      <div class="t2">${fmtClock(i.t)} into clip · ${km} km · ${Math.round(i.confidence*100)}% · ${i.id}</div></div>`;
+    feed.prepend(el);
     document.getElementById('feedn').textContent=replay.seen.size;
   }
-  window._replayStep=step;
-  document.getElementById('play').onclick=toggleReplay;
-  document.getElementById('reset').onclick=()=>{stopReplay();replay.t=0;replay.seen.clear();
-    if(replay.video)replay.video.currentTime=0; viewFleet();};
+
+  // real detector output (video + timestamped detections) takes over the replay when present;
+  // otherwise it falls back to our simulated trip timeline built from this bus's actual stops
+  const video=document.getElementById('replayVideo');
+  if(video){
+    let triedRawSource=false;
+    video.onerror=()=>{
+      if(!triedRawSource){
+        // annotated.mp4 missing/unplayable — try the raw dashcam clip (no boxes, still timestamp-synced)
+        triedRawSource=true;
+        video.src='source.mp4';
+        video.load();
+        return;
+      }
+      // neither annotated.mp4 nor source.mp4 are playable here — fall back to the simulated timeline
+      video.remove();
+      const fb=document.getElementById('videoFallback'); if(fb)fb.style.display='';
+      wireSimulated();
+    };
+    video.onloadedmetadata=wireVideoDriven;
+  } else {
+    wireSimulated();
+  }
+
+  function wireVideoDriven(){
+    video.ontimeupdate=()=>{
+      replay.t=video.duration?video.currentTime/video.duration:0;
+      replay.df=cumFrac(video.currentTime,video.duration);   // distance fraction from real motion
+      busMarker.setLatLng(posAt(replay.df));
+      document.getElementById('fill').style.width=(replay.t*100)+'%';
+      document.getElementById('clock').textContent=(replay.df*totalKm).toFixed(1)+' km';
+      live.forEach(i=>{
+        if(video.currentTime>=i.t && !replay.seen.has(i.id)){
+          replay.seen.add(i.id); markerForLive(i).addTo(fm); addFeedLive(i);
+        }
+      });
+    };
+    video.onended=stopReplay;
+    document.getElementById('track').onclick=(e)=>{
+      const r=e.currentTarget.getBoundingClientRect();
+      video.currentTime=((e.clientX-r.left)/r.width)*(video.duration||0);
+    };
+    document.getElementById('play').onclick=()=>{
+      const b=document.getElementById('play');
+      if(video.paused){video.play();b.textContent='❚❚ Pause';} else {video.pause();b.textContent='▶ Play';}
+    };
+    document.getElementById('reset').onclick=()=>{
+      stopReplay();replay.t=0;replay.seen.clear();render();
+    };
+  }
+
+  function wireSimulated(){
+    // this bus's real trip stops — evenly spaced along the fixed demo route and dropped exactly where
+    // the bus currently is, since the issues' own real coordinates sit far from this decorative path
+    const routeIssues=trip.stops;
+    function step(){
+      replay.t=Math.min(1,replay.t+0.006);
+      const p=posAt(replay.t);
+      busMarker.setLatLng(p);
+      document.getElementById('fill').style.width=(replay.t*100)+'%';
+      document.getElementById('clock').textContent=(replay.t*totalKm).toFixed(1)+' km';
+      routeIssues.forEach((i,stopIdx)=>{ const at=(stopIdx+1)/(routeIssues.length+1);
+        if(replay.t>=at && !replay.seen.has(i.id)){ replay.seen.add(i.id);
+          markerAt(i,p).addTo(fm); addFeed(i); }});
+      if(replay.t>=1){stopReplay();}
+    }
+    function addFeed(i){ const feed=document.getElementById('feed');
+      if(replay.seen.size===1)feed.innerHTML='';
+      const el=document.createElement('div');el.className='feeditem';
+      el.innerHTML=`<span class="tdot" style="background:${TYPE[i.type].c}"></span>
+        <div class="meta"><div class="t1">${TYPE[i.type].label} <span class="sev" style="background:${SEVC[i.severity]}">SEV ${i.severity}</span></div>
+        <div class="t2">${(replay.t*totalKm).toFixed(1)} km · ${Math.round(i.confidence*100)}% · ${i.id}</div></div>`;
+      el.onclick=()=>openIssue(i.id); feed.prepend(el);
+      document.getElementById('feedn').textContent=replay.seen.size;
+    }
+    window._replayStep=step;
+    document.getElementById('play').onclick=toggleReplay;
+    document.getElementById('reset').onclick=()=>{stopReplay();replay.t=0;replay.seen.clear();render();};
+  }
 }
 function toggleReplay(){ const b=document.getElementById('play');
-  if(replay.video&&replay.videoReady){ // dashcam drives the timeline
-    if(replay.video.paused){ replay.video.play().catch(()=>{}); b.textContent='❚❚ Pause'; }
-    else { replay.video.pause(); b.textContent='▶ Play'; }
-    return;
-  }
   if(replay.timer){stopReplay();} else {b.textContent='❚❚ Pause';replay.timer=setInterval(()=>window._replayStep(),90);} }
-function stopReplay(){ if(replay.timer){clearInterval(replay.timer);replay.timer=null;}
-  if(replay.video&&!replay.video.paused)replay.video.pause();
-  const b=document.getElementById('play'); if(b)b.textContent= replay.t>=1?'▶ Replay':'▶ Play'; }
+function stopReplay(){
+  if(replay.timer){clearInterval(replay.timer);replay.timer=null;}
+  const v=document.getElementById('replayVideo'); if(v && !v.paused)v.pause();
+  const b=document.getElementById('play'); if(b)b.textContent= replay.t>=1?'▶ Replay':'▶ Play';
+}
 
 /* ---------- issue detail drawer ---------- */
 let issueCtx={};
@@ -508,6 +866,7 @@ function openIssue(id,opts){
         <dt>Independent passes</dt><dd>${i.passes} ${i.passes>=3?'✓ confirmed':'· awaiting gate'}</dd>
         ${i.type!=='waterlogging'?`<dt>Assigned crew</dt><dd>${i.crew? crewById(i.crew).name+' · '+i.crew : 'Unassigned · backlog'}</dd>`:''}
       </dl>
+      ${crewPerformanceNote(i)}
       <div class="section-t" style="margin-top:4px">Pass history</div>
       <ul class="tl">${hist.map(h=>`<li class="${h.detected?'':'miss'}"><b>${h.detected?'Detected':'Not detected'}</b>
         <span class="w"> · ${fmtDT(h.t)} · ${h.bus}</span></li>`).join('')}</ul>
@@ -583,12 +942,26 @@ function afterAction(i){ // recompute scores + refresh underlying view, keep dra
 }
 function closeDrawer(){document.getElementById('drawer').classList.remove('on');document.getElementById('crewModal').classList.remove('on');document.getElementById('scrim').classList.remove('on');}
 
-// Real detector evidence (annotated frame / crop) when the pipeline provides it,
-// falling back to the schematic if the image is absent or fails to load.
+const EVIDENCE_PHOTOS={
+  pothole:[
+    'https://res.cloudinary.com/dk1uns1nz/image/upload/v1783174326/AI_lu8g4o.png',
+    'https://res.cloudinary.com/dk1uns1nz/image/upload/v1783174325/pothhole-detection-500x500_n3moul.webp'
+  ],
+  garbage_pile:[
+    'https://res.cloudinary.com/dk1uns1nz/image/upload/v1783175036/images_3_garjvs.jpg',
+    'https://res.cloudinary.com/dk1uns1nz/image/upload/v1783175036/images_2_btrf63.jpg'
+  ]
+};
+function pickEvidencePhoto(type,id){    // deterministic per issue — same photo on every view, not reshuffled each render
+  const photos=EVIDENCE_PHOTOS[type]; if(!photos) return null;
+  let hash=0; for(const ch of id) hash=(hash*31+ch.charCodeAt(0))>>>0;
+  return photos[hash%photos.length];
+}
+// Real detector evidence (annotated frame / crop) when the pipeline provides it (issue.photo),
+// falling back to the curated stock photo / schematic below when it's absent or fails to load.
 function evidenceHTML(i){
   if(i.photo){
     return `<img src="${i.photo}" alt="${TYPE[i.type].label} detection" class="evimg"
-      style="width:100%;height:100%;object-fit:cover;display:block"
       onerror="this.outerHTML=window.__evSVG('${i.id}')">
       <span class="evtag">detected frame · ${Math.round(i.confidence*100)}% · ${i.id}</span>`;
   }
@@ -597,6 +970,14 @@ function evidenceHTML(i){
 window.__evSVG=function(id){ const i=issues.find(x=>x.id===id); return i?evidenceSVG(i):''; };
 function evidenceSVG(i){
   const c=TYPE[i.type].c;
+  const photo=pickEvidencePhoto(i.type,i.id);
+  if(photo){
+    return `<div style="position:relative;width:100%;height:100%">
+      <img src="${photo}" alt="${TYPE[i.type].label} evidence" style="width:100%;height:100%;object-fit:cover;display:block">
+      <span style="position:absolute;left:10px;top:10px;background:${c};color:#fff;font-size:10px;font-weight:700;padding:3px 8px;border-radius:3px;font-family:'Noto Sans',sans-serif">${TYPE[i.type].label} ${Math.round(i.confidence*100)}%</span>
+      <span style="position:absolute;left:10px;bottom:8px;color:#fff;font-size:9px;font-family:'Noto Sans',sans-serif;text-shadow:0 1px 2px rgba(0,0,0,.8)">dashcam frame · ${i.id}</span>
+    </div>`;
+  }
   return `<svg viewBox="0 0 320 200" width="100%" height="100%" style="display:block">
     <rect width="320" height="200" fill="#2b2f36"/>
     <polygon points="0,200 130,96 190,96 320,200" fill="#3a3f47"/>
@@ -616,7 +997,8 @@ document.querySelectorAll('.nav a').forEach(a=>a.onclick=()=>{
   stopReplay();
   state.view=a.dataset.view;
   if(a.dataset.type)state.type=a.dataset.type;
-  if(state.view==='street')state.street=null;
+  if(state.view==='street'){state.street=null;state.ward=null;}
+  if(state.view==='fleet'){state.bus=null;state.trip=null;}
   if(a.id==='nav-myward'){const s=getSession(); if(s)state.ward=s.ward;}
   render();
 });
@@ -636,15 +1018,16 @@ function applyRoleUI(session){
   chip.innerHTML=`<span class="rolebadge role-${session.role}">${session.role.replace('_',' ')}</span>
     <b>${session.username}</b><button class="btn sm" id="logoutBtn">Log out</button>`;
   document.getElementById('logoutBtn').onclick=logout;
-  document.body.classList.remove('role-admin','role-ward_officer','role-user');
+  document.body.classList.remove('role-admin','role-ward_officer','role-user','role-crew');
   document.body.classList.add('role-'+session.role);
   if(session.role==='ward_officer'){ state.view='ward'; state.ward=session.ward; }
+  if(session.role==='crew'){ state.view='mywork'; }
 }
 
 /* ---------- live processing feed ----------
-   Polls js/live.json (regenerated by the pipeline as the detector processes the video)
-   and updates the dashboard IN PLACE — new, de-duplicated detections appear on the map
-   and lists without a page reload. No-ops on static hosting where live.json is absent. */
+   Polls js/live.json (regenerated by the backend pipeline as the detector processes the
+   video) and updates the dashboard IN PLACE — new, de-duplicated detections appear on the
+   map and lists without a page reload. No-ops on static hosting where live.json is absent. */
 let __liveRev=null;
 async function pollLive(){
   try{
