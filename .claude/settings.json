@@ -13,7 +13,17 @@
       "Bash(git add *)",
       "Bash(awk '{print $1}')",
       "Bash(node -e ' *)",
-      "Bash(pkill -f \"http.server 8765\")"
+      "Bash(pkill -f \"http.server 8765\")",
+      "Bash(python3 -c ' *)",
+      "Bash(python3 -m http.server 8765)",
+      "Bash(curl -sf http://localhost:8765/detections.json -o /dev/null)",
+      "Bash(which chromium-cli *)",
+      "Read(//opt/homebrew/bin/**)",
+      "Bash(npx --yes playwright install-deps chromium --dry-run)",
+      "Bash(npm init *)",
+      "Bash(npm install *)",
+      "Bash(node verify-evidence.js)",
+      "Bash(node verify-variety.js)"
     ]
   }
 }

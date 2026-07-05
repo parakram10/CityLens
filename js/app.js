@@ -611,10 +611,17 @@ function tripsForBus(busId){ // derives real trips from issue history — every 
 // see FINETUNING.md / README.md for how a run's output folder is laid out. When present, it
 // drives the trip replay below instead of the simulated mock timeline.
 let LIVE=null;
+let REAL_EVIDENCE=null; // populated from detections.json once loaded — real dashcam frames with detection boxes burned in, grouped by app issue type
 fetch('detections.json').then(r=>r.ok?r.json():Promise.reject(new Error('no detections.json'))).then(d=>{
   LIVE=d;
+  REAL_EVIDENCE={};
+  (d.issues||[]).forEach(x=>{
+    if(!x.screen_grab_path) return;
+    const t=mapDetectorType(x.issue_type);
+    (REAL_EVIDENCE[t]=REAL_EVIDENCE[t]||[]).push(x.screen_grab_path);
+  });
   if(state.view==='fleet') render();
-}).catch(()=>{ LIVE=null; });
+}).catch(()=>{ LIVE=null; REAL_EVIDENCE=null; });
 
 function mapDetectorType(t){ // civic_issue_detector issue_type -> this app's issue type keys
   return ({garbage:'garbage_pile', roadside_litter:'garbage_pile', garbage_pile:'garbage_pile',
@@ -926,7 +933,7 @@ function afterAction(i){ // recompute scores + refresh underlying view, keep dra
 }
 function closeDrawer(){document.getElementById('drawer').classList.remove('on');document.getElementById('crewModal').classList.remove('on');document.getElementById('scrim').classList.remove('on');}
 
-const EVIDENCE_PHOTOS={
+const EVIDENCE_PHOTOS={   // fallback stock photos, used only until detections.json's real dashcam frames (REAL_EVIDENCE) load
   pothole:[
     'https://res.cloudinary.com/dk1uns1nz/image/upload/v1783174326/AI_lu8g4o.png',
     'https://res.cloudinary.com/dk1uns1nz/image/upload/v1783174325/pothhole-detection-500x500_n3moul.webp'
@@ -937,7 +944,7 @@ const EVIDENCE_PHOTOS={
   ]
 };
 function pickEvidencePhoto(type,id){    // deterministic per issue — same photo on every view, not reshuffled each render
-  const photos=EVIDENCE_PHOTOS[type]; if(!photos) return null;
+  const photos=(REAL_EVIDENCE && REAL_EVIDENCE[type]) || EVIDENCE_PHOTOS[type]; if(!photos) return null;
   let hash=0; for(const ch of id) hash=(hash*31+ch.charCodeAt(0))>>>0;
   return photos[hash%photos.length];
 }
