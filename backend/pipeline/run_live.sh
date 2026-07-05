@@ -17,7 +17,8 @@ CITYLENS="$(cd "$HERE/../.." && pwd)"          # repo root
 DETECTOR="${DETECTOR_DIR:-$BACKEND/detector}"
 CLIP="${1:-$CITYLENS/assets/demo.mp4}"
 CLIP="$(python3 -c 'import os,sys; print(os.path.abspath(sys.argv[1]))' "$CLIP")"
-RUN_NAME="citylens_live"
+# Distinct run id per clip -> each clip is its own Fleet trip; snapshots update it in place.
+RUN_NAME="$(basename "${CLIP%.*}")"
 SNAPSHOT_SEC="${SNAPSHOT_SEC:-30}"
 REBUILD_SEC="${REBUILD_SEC:-12}"
 DET="$DETECTOR/outputs/$RUN_NAME/detections.json"

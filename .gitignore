@@ -21,12 +21,13 @@ dataset/
 # ── Large videos — place locally, not committed ──────────────
 assets/*.mp4
 assets/*.mov
-# Root replay clips consumed by the Fleet demo (local only;
-# the deployed site falls back to the simulated timeline).
 annotated.mp4
 source.mp4
 screen_grabs/
+# Per-run replay clips symlinked into runs/<id>/ — local only; the deployed
+# site falls back to each trip's simulated timeline.
+runs/*/*.mp4
 
 # NOTE: committed on purpose — the deployed GitHub Pages site depends on them:
-#   js/live.js, js/live.json, assets/evidence/*.jpg,
-#   backend/pipeline/motion_*.json, detections.json, summary.json, crops/
+#   js/live.js, js/live.json, assets/evidence/*.jpg, backend/pipeline/motion_*.json,
+#   runs/index.json (the Fleet manifest) and runs/*/crops/*.jpg (replay thumbnails).

@@ -1,0 +1,15 @@
+{
+  "source": "seed/morning.mp4",
+  "completed_at_utc": "2026-07-03T08:12:00+00:00",
+  "video": { "fps": 30.0, "width": 1920, "height": 1080, "last_frame_index": 5999 },
+  "issue_summary": { "unique_issues": 6, "by_issue_type": { "pothole": 3, "garbage": 3 } },
+  "_note": "Mock seed run so the Fleet shows a baseline trip before any real detector run.",
+  "issues": [
+    { "issue_id": "m01", "issue_type": "garbage", "issue_group": "waste_litter", "peak_confidence_pct": 68.0, "detection_count": 18, "first_timestamp_sec": 12.0, "last_timestamp_sec": 18.4, "bbox_xyxy": [610, 720, 960, 1000] },
+    { "issue_id": "m02", "issue_type": "pothole", "issue_group": "road_defect", "peak_confidence_pct": 82.5, "detection_count": 33, "first_timestamp_sec": 41.0, "last_timestamp_sec": 48.2, "bbox_xyxy": [800, 650, 1160, 850] },
+    { "issue_id": "m03", "issue_type": "garbage", "issue_group": "waste_litter", "peak_confidence_pct": 59.2, "detection_count": 11, "first_timestamp_sec": 74.0, "last_timestamp_sec": 77.5, "bbox_xyxy": [1100, 700, 1350, 930] },
+    { "issue_id": "m04", "issue_type": "pothole", "issue_group": "road_defect", "peak_confidence_pct": 90.1, "detection_count": 44, "first_timestamp_sec": 112.0, "last_timestamp_sec": 120.6, "bbox_xyxy": [560, 700, 1120, 1000] },
+    { "issue_id": "m05", "issue_type": "garbage", "issue_group": "waste_litter", "peak_confidence_pct": 64.7, "detection_count": 15, "first_timestamp_sec": 149.0, "last_timestamp_sec": 153.9, "bbox_xyxy": [700, 690, 1010, 940] },
+    { "issue_id": "m06", "issue_type": "pothole", "issue_group": "road_defect", "peak_confidence_pct": 77.8, "detection_count": 21, "first_timestamp_sec": 186.0, "last_timestamp_sec": 192.4, "bbox_xyxy": [880, 660, 1120, 820] }
+  ]
+}

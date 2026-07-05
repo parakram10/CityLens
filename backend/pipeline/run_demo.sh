@@ -17,7 +17,8 @@ CLIP="${1:-$CITYLENS/assets/demo.mp4}"
 # Resolve to an absolute path: the detector runs from $DETECTOR (a different cwd), so a
 # relative clip path would break there even though it exists here.
 CLIP="$(python3 -c 'import os,sys; print(os.path.abspath(sys.argv[1]))' "$CLIP")"
-RUN_NAME="citylens_demo"
+# Distinct run id per clip -> each clip is its own Fleet trip; re-running a clip updates it.
+RUN_NAME="$(basename "${CLIP%.*}")"
 DET="$HERE/sample_detections.json"   # fallback if the detector can't run
 
 # Prefer the detector's venv python (has cv2/numpy for optical flow + YOLO).
