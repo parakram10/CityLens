@@ -389,7 +389,7 @@ function viewStreet(){
   <div class="card"><div class="ch"><h3>Fleet coverage</h3><span class="r">buses that have surveyed this corridor — click a trip to replay it</span></div>
     ${(()=>{const trips=tripsForStreet(sel.id); return trips.length
       ?`<table><thead><tr><th>Bus</th><th>Trip date</th><th>Detections here</th></tr></thead><tbody>
-        ${trips.map(t=>`<tr class="clk" data-bus="${t.bus}" data-date="${t.date}"><td><b>${t.bus}</b></td><td>${fmtDate(t.date)}</td><td>${t.detections}</td></tr>`).join('')}
+        ${trips.map(t=>`<tr class="clk" data-bus="${t.bus}" data-trip="${t.id}"><td><b>${t.bus}</b></td><td>${fmtDate(t.date)}</td><td>${t.detections}</td></tr>`).join('')}
         </tbody></table>`
       :'<div class="hint" style="padding:12px 16px">No fleet passes logged on this corridor yet.</div>';})()}
   </div>`;
@@ -402,18 +402,18 @@ function viewStreet(){
   list.slice().sort((a,b)=>priority(b)-priority(a)).forEach(i=>sq.appendChild(qItem(i)));
   c.querySelectorAll('tr[data-s]').forEach(tr=>tr.onclick=()=>{state.street=tr.dataset.s;render();});
   c.querySelectorAll('tr[data-bus]').forEach(tr=>tr.onclick=()=>{
-    state.view='fleet'; state.bus=tr.dataset.bus; state.trip=tr.dataset.date; render();
+    state.view='fleet'; state.bus=tr.dataset.bus; state.trip=tr.dataset.trip; render();
   });
 }
 function tripsForStreet(streetId){ // which bus+trip pairs actually detected something on this corridor — the corridor-to-fleet link
   const byKey={};
   issues.filter(i=>i.streetId===streetId).forEach(i=>{
     (i.history||[]).forEach(h=>{
-      const date=h.t.slice(0,10), key=h.bus+'|'+date;
-      (byKey[key]=byKey[key]||{bus:h.bus,date,issueIds:new Set()}).issueIds.add(i.id);
+      const date=h.t.slice(0,10), id=date+'|'+i.ward, key=h.bus+'|'+id;
+      (byKey[key]=byKey[key]||{bus:h.bus,date,id,issueIds:new Set()}).issueIds.add(i.id);
     });
   });
-  return Object.values(byKey).map(x=>({bus:x.bus,date:x.date,detections:x.issueIds.size}))
+  return Object.values(byKey).map(x=>({bus:x.bus,date:x.date,id:x.id,detections:x.issueIds.size}))
     .sort((a,b)=>b.date.localeCompare(a.date));
 }
 

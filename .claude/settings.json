@@ -11,7 +11,9 @@
       "Bash(git rm *)",
       "Bash(echo \"---exit $?---\")",
       "Bash(git add *)",
-      "Bash(awk '{print $1}')"
+      "Bash(awk '{print $1}')",
+      "Bash(node -e ' *)",
+      "Bash(pkill -f \"http.server 8765\")"
     ]
   }
 }
