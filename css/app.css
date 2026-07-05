@@ -78,6 +78,7 @@ th{text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.4px
   font-weight:700;padding:9px 12px;border-bottom:1px solid var(--line);position:sticky;top:0;background:#fff}
 td{padding:10px 12px;border-bottom:1px solid #f1f2f5}
 tr.clk{cursor:pointer} tr.clk:hover td{background:#fafbfc}
+tr.clk.sel td{background:var(--warn-bg)} tr.clk.sel td:first-child{box-shadow:inset 3px 0 0 var(--chalo)}
 .rank{font-weight:800;color:var(--faint);width:26px}
 .scorepill{font-weight:800;color:#fff;border-radius:14px;padding:2px 10px;font-size:12px;display:inline-block;min-width:34px;text-align:center}
 .trend{font-weight:700;font-size:12px}.trend.up{color:var(--good)}.trend.down{color:var(--pothole)}
