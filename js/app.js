@@ -589,47 +589,20 @@ function openAddCrew(){
 
 /* ---------- fleet + replay ---------- */
 let replay={timer:null,t:0,seen:new Set()};
-function tripsForBus(busId){ // derives real trips from issue history — every detection pass by this bus, grouped by calendar day AND ward (a bus doesn't hop across the city in one run)
-  const byKey={};
-  issues.forEach(i=>{
-    (i.history||[]).forEach(h=>{
-      if(h.bus!==busId) return;
-      const date=h.t.slice(0,10), key=date+'|'+i.ward;
-      (byKey[key]=byKey[key]||{date,ward:i.ward,hits:[]}).hits.push({t:h.t,issue:i});
-    });
-  });
-  return Object.entries(byKey).map(([key,trip])=>{
-    trip.hits.sort((a,b)=>a.t.localeCompare(b.t));
-    const seen=new Set(), stops=[];
-    trip.hits.forEach(h=>{ if(!seen.has(h.issue.id)){ seen.add(h.issue.id); stops.push(h.issue); } });
-    return {id:key,date:trip.date,stops,wards:[trip.ward],detections:trip.hits.length};
+function tripsForBus(busId){ // one detector run assigned to this bus = one trip (manifest-driven)
+  return liveRuns().filter(r=>r.bus===busId).map(r=>{
+    const stops=issues.filter(i=>i.runId===r.id);
+    return {id:r.id, date:r.date, label:r.label, run:r, stops,
+      wards:[...new Set(stops.map(i=>i.ward))],
+      detections:(r.feed||[]).length};
   }).sort((a,b)=>b.date.localeCompare(a.date));
 }
 
-// Real output from civic_issue_detector, loaded async. Expects detections.json (and,
-// alongside it, annotated.mp4 + the crops/ folder from the SAME run) at the project root —
-// see FINETUNING.md / README.md for how a run's output folder is laid out. When present, it
-// drives the trip replay below instead of the simulated mock timeline.
-let LIVE=null;
-fetch('detections.json').then(r=>r.ok?r.json():Promise.reject(new Error('no detections.json'))).then(d=>{
-  LIVE=d;
-  if(state.view==='fleet') render();
-}).catch(()=>{ LIVE=null; });
-
-function mapDetectorType(t){ // civic_issue_detector issue_type -> this app's issue type keys
-  return ({garbage:'garbage_pile', roadside_litter:'garbage_pile', garbage_pile:'garbage_pile',
-    pothole:'pothole', open_drain:'street_obstruction', manhole:'street_obstruction',
-    waterlogging:'waterlogging'})[t] || 'street_obstruction';
-}
-function liveIssues(){ // LIVE.issues -> shape the feed/map code needs, sorted by first appearance
-  if(!LIVE || !LIVE.issues) return [];
-  return LIVE.issues.map(x=>({
-    id:x.issue_id, type:mapDetectorType(x.issue_type),
-    confidence:(x.peak_confidence_pct||0)/100,
-    severity:Math.max(1,Math.min(5,Math.round((x.peak_confidence_pct||0)/20))),
-    t:x.first_timestamp_sec||0, crop:x.crop_path||null,
-  })).sort((a,b)=>a.t-b.t);
-}
+// Detector runs injected by js/live.js -> window.CITYLENS_LIVE.runs. Each run is one Fleet
+// trip: {id,label,bus,date,distance_km,video,motion,feed}. Its de-duplicated pins live in
+// DATA.issues (tagged with runId); its feed/motion/video drive that trip's replay.
+function liveRuns(){ return (window.CITYLENS_LIVE && window.CITYLENS_LIVE.runs) || []; }
+function runById(id){ return liveRuns().find(r=>r.id===id) || null; }
 
 function viewFleet(){
   if(state.bus && state.trip) return viewTripReplay();
@@ -637,7 +610,7 @@ function viewFleet(){
 }
 function viewFleetList(){
   document.getElementById('h-title').textContent='Fleet & route replay';
-  document.getElementById('h-sub').textContent = liveIssues().length
+  document.getElementById('h-sub').textContent = liveRuns().length
     ? 'Live detections from the on-bus model — open a trip below to watch the synced replay.'
     : 'Per-bus contribution — expand a bus to see its logged trips.';
   crumb([{t:'Mumbai',go:()=>{state.view='city';render();}},{t:'Fleet'}]);
@@ -672,14 +645,15 @@ function viewTripReplay(){
   crumb([{t:'Mumbai',go:()=>{state.view='city';render();}},{t:'Fleet',go:()=>{state.bus=null;state.trip=null;render();}},
     {t:state.bus,go:()=>{state.bus=null;state.trip=null;render();}},{t:fmtDate(trip.date)}]);
   const c=document.getElementById('content');
-  const live=liveIssues();
+  const run=trip.run;                              // detector run backing this trip
+  const live=(run&&run.feed)?run.feed:[];          // timed detections for the replay feed
   c.innerHTML=`<div class="row map-side">
     <div class="card">
       <div class="ch"><h3>Trip replay — ${fmtDate(trip.date)}</h3><span class="r">bus ${state.bus}</span></div>
       <div class="videoslot" id="videoslot">
-        ${live.length?`<video id="replayVideo" src="annotated.mp4" muted playsinline style="width:100%;height:100%;object-fit:cover;display:block"></video>`:''}
+        ${(run&&run.video)?`<video id="replayVideo" src="${run.video}" muted playsinline style="width:100%;height:100%;object-fit:cover;display:block"></video>`:''}
         <div class="rd"><span class="d"></span>DASHCAM</div>
-        <div id="videoFallback" style="${live.length?'display:none':''}">Drop your sourced clip here (<code>&lt;video&gt;</code> slot) — map pins already sync to the route timeline below.</div>
+        <div id="videoFallback" style="${(run&&run.video)?'display:none':''}">No clip bundled for this trip — map pins still sync to the route timeline below.</div>
       </div>
       <div id="fleetmap"></div>
       <div class="controls">
@@ -704,14 +678,29 @@ function viewTripReplay(){
     state.view='street'; state.ward=a.dataset.gotoWard; state.street=a.dataset.gotoStreet; render();
   });
 
-  stopReplay(); replay.t=0; replay.seen.clear();
+  stopReplay(); replay.t=0; replay.df=0; replay.seen.clear();
   const fm=L.map('fleetmap',{zoomControl:true,attributionControl:false});
   L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',{subdomains:'abcd'}).addTo(fm);
   const route=DATA.routes['A-71']; // same fixed, real road-following route used everywhere — identical mechanics to the original single demo
   const poly=addRouteOverlay(fm);
   fm.fitBounds(poly.getBounds().pad(0.25));
   const busMarker=L.circleMarker(route[0],{radius:8,fillColor:'#f57c00',color:'#fff',weight:2,fillOpacity:1}).addTo(fm);
-  const totalKm=8.6;
+  // Real motion pacing from the backend pipeline (window.CITYLENS_LIVE.motion): the true
+  // distance the clip covers + a cumulative-distance curve, so the km readout and marker
+  // follow the video's actual speed (crawl, stops) instead of a fixed 8.6 km linear sweep.
+  // Falls back to the old behaviour when the motion payload is absent.
+  const __M=(run&&run.motion)||null;               // this run's real motion pacing
+  const totalKm=(__M&&__M.distance_km)?__M.distance_km:((run&&run.distance_km)||8.6);
+  function cumFrac(sec,dur){ // video time -> distance fraction (0..1) along the real motion curve
+    if(!__M||!__M.cum||!__M.cum.length) return dur?Math.min(1,sec/dur):0;
+    const c=__M.cum;
+    if(sec<=c[0][0]) return c[0][1];
+    if(sec>=c[c.length-1][0]) return c[c.length-1][1];
+    let lo=0,hi=c.length-1;
+    while(lo<hi){const md=(lo+hi)>>1; if(c[md][0]<sec)lo=md+1; else hi=md;}
+    const a=c[Math.max(1,lo)-1], b=c[Math.max(1,lo)];
+    return b[0]<=a[0]?a[1]:a[1]+(b[1]-a[1])*(sec-a[0])/(b[0]-a[0]);
+  }
 
   function posAt(t){ // t in 0..1 -> [lat,lon] along the fixed route
     const n=route.length-1, x=t*n, idx=Math.min(n-1,Math.floor(x)), f=x-idx;
@@ -720,14 +709,14 @@ function viewTripReplay(){
   }
   function fmtClock(sec){ const m=Math.floor(sec/60), s=Math.floor(sec%60); return `${m}:${String(s).padStart(2,'0')}`; }
   function markerForLive(i){ // no GPS from the detector — drop the pin at the bus's position (km along route) when it fired
-    const km=(replay.t*totalKm).toFixed(1);
-    return L.circleMarker(posAt(replay.t),{radius:3+i.severity*1.4,fillColor:TYPE[i.type].c,color:'#fff',weight:1.4,fillOpacity:.9})
+    const km=(replay.df*totalKm).toFixed(1);
+    return L.circleMarker(posAt(replay.df),{radius:3+i.severity*1.4,fillColor:TYPE[i.type].c,color:'#fff',weight:1.4,fillOpacity:.9})
       .bindPopup(`<b>${TYPE[i.type].label}</b> · ${Math.round(i.confidence*100)}% confidence<br>${fmtClock(i.t)} into clip · ${km} km along route`);
   }
   function addFeedLive(i){
     const feed=document.getElementById('feed');
     if(replay.seen.size===1)feed.innerHTML='';
-    const km=(replay.t*totalKm).toFixed(1);
+    const km=(replay.df*totalKm).toFixed(1);
     const el=document.createElement('div');el.className='feeditem';
     el.innerHTML=`<span class="tdot" style="background:${TYPE[i.type].c}"></span>
       ${i.crop?`<img src="${i.crop}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;flex:0 0 36px" onerror="this.remove()">`:''}
@@ -741,16 +730,8 @@ function viewTripReplay(){
   // otherwise it falls back to our simulated trip timeline built from this bus's actual stops
   const video=document.getElementById('replayVideo');
   if(video){
-    let triedRawSource=false;
     video.onerror=()=>{
-      if(!triedRawSource){
-        // annotated.mp4 missing/unplayable — try the raw dashcam clip (no boxes, still timestamp-synced)
-        triedRawSource=true;
-        video.src='source.mp4';
-        video.load();
-        return;
-      }
-      // neither annotated.mp4 nor source.mp4 are playable here — fall back to the simulated timeline
+      // this run's clip isn't available here (e.g. the deployed site) — simulated timeline
       video.remove();
       const fb=document.getElementById('videoFallback'); if(fb)fb.style.display='';
       wireSimulated();
@@ -763,9 +744,10 @@ function viewTripReplay(){
   function wireVideoDriven(){
     video.ontimeupdate=()=>{
       replay.t=video.duration?video.currentTime/video.duration:0;
-      busMarker.setLatLng(posAt(replay.t));
+      replay.df=cumFrac(video.currentTime,video.duration);   // distance fraction from real motion
+      busMarker.setLatLng(posAt(replay.df));
       document.getElementById('fill').style.width=(replay.t*100)+'%';
-      document.getElementById('clock').textContent=(replay.t*totalKm).toFixed(1)+' km';
+      document.getElementById('clock').textContent=(replay.df*totalKm).toFixed(1)+' km';
       live.forEach(i=>{
         if(video.currentTime>=i.t && !replay.seen.has(i.id)){
           replay.seen.add(i.id); markerForLive(i).addTo(fm); addFeedLive(i);
@@ -836,7 +818,7 @@ function openIssue(id,opts){
       <div style="font-size:12px;color:var(--faint)">${i.id} · Ward ${i.ward}</div></div>
       <button class="x" id="dx">×</button></div>
     <div class="db">
-      <div class="evidence">${evidenceSVG(i)}</div>
+      <div class="evidence">${evidenceHTML(i)}</div>
       <div style="display:flex;gap:8px;margin-top:12px">
         <span class="sev" style="background:${SEVC[i.severity]};padding:4px 9px">SEVERITY ${i.severity}</span>
         <span class="badge ${i.status}" style="padding:4px 11px">${i.status.replace('_',' ')}</span>
@@ -941,6 +923,17 @@ function pickEvidencePhoto(type,id){    // deterministic per issue — same phot
   let hash=0; for(const ch of id) hash=(hash*31+ch.charCodeAt(0))>>>0;
   return photos[hash%photos.length];
 }
+// Real detector evidence (annotated frame / crop) when the pipeline provides it (issue.photo),
+// falling back to the curated stock photo / schematic below when it's absent or fails to load.
+function evidenceHTML(i){
+  if(i.photo){
+    return `<img src="${i.photo}" alt="${TYPE[i.type].label} detection" class="evimg"
+      onerror="this.outerHTML=window.__evSVG('${i.id}')">
+      <span class="evtag">detected frame · ${Math.round(i.confidence*100)}% · ${i.id}</span>`;
+  }
+  return evidenceSVG(i);
+}
+window.__evSVG=function(id){ const i=issues.find(x=>x.id===id); return i?evidenceSVG(i):''; };
 function evidenceSVG(i){
   const c=TYPE[i.type].c;
   const photo=pickEvidencePhoto(i.type,i.id);
@@ -996,3 +989,39 @@ function applyRoleUI(session){
   if(session.role==='ward_officer'){ state.view='ward'; state.ward=session.ward; }
   if(session.role==='crew'){ state.view='mywork'; }
 }
+
+/* ---------- live processing feed ----------
+   Polls js/live.json (regenerated by the backend pipeline as the detector processes the
+   video) and updates the dashboard IN PLACE — new, de-duplicated detections appear on the
+   map and lists without a page reload. No-ops on static hosting where live.json is absent. */
+let __liveRev=null;
+async function pollLive(){
+  try{
+    const r=await fetch('js/live.json?_='+Date.now(),{cache:'no-store'});
+    if(!r.ok) return;
+    const p=await r.json();
+    if(!p||!Array.isArray(p.issues)||p.rev===__liveRev) return;
+    const first=__liveRev===null;
+    __liveRev=p.rev;
+    const prevLive=issues.filter(i=>i.runId).length;
+    const seed=issues.filter(i=>!i.runId);         // keep seed + officer edits (no runId)
+    issues.length=0; issues.push(...seed, ...p.issues);             // mutate the shared array in place
+    if(Array.isArray(p.replay)) DATA.replay_ids=p.replay;
+    Object.assign(SCORES, wardScores());
+    if(first){ counts(); return; }                                  // silent sync at startup
+    liveToast(p.issues.length, p.issues.length-prevLive, p.partial);
+    // Refresh the view behind the user only when they aren't mid-interaction.
+    const busy=document.getElementById('drawer').classList.contains('on')
+      || document.getElementById('crewModal').classList.contains('on')
+      || state.view==='fleet';
+    if(busy) counts(); else render();
+  }catch(e){/* live.json not served (static host) — ignore */}
+}
+function liveToast(total, added, partial){
+  let el=document.getElementById('liveToast');
+  if(!el){ el=document.createElement('div'); el.id='liveToast'; el.className='livetoast'; document.body.appendChild(el); }
+  el.innerHTML=`<span class="dot"></span> ${partial?'Processing video':'Processing complete'} · <b>${total}</b> detections${added>0?` · <span style="color:#8fd39a">+${added} new</span>`:''}`;
+  el.classList.add('show');
+  clearTimeout(el._t); el._t=setTimeout(()=>el.classList.remove('show'), 4200);
+}
+if(getSession()){ pollLive(); setInterval(pollLive, 8000); }
