@@ -13,7 +13,14 @@
       "Bash(git add *)",
       "Bash(awk '{print $1}')",
       "Bash(node -e ' *)",
-      "Bash(pkill -f \"http.server 8765\")"
+      "Bash(pkill -f \"http.server 8765\")",
+      "Bash(python3 -c ' *)",
+      "Bash(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1 annotated.mp4)",
+      "Bash(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1 outputs/vid1_demo_h264/annotated.mp4)",
+      "Bash(cd \"/Users/abhishekgiri/Desktop/chalo cards website/CityLens\" && cp annotated.mp4 runs/citylens_demo/annotated.mp4 && ls -la runs/citylens_demo/)"
+    ],
+    "additionalDirectories": [
+      "/Users/abhishekgiri/Desktop/chalo cards website/CityLens"
     ]
   }
 }

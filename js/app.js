@@ -406,11 +406,14 @@ function viewStreet(){
   });
 }
 function tripsForStreet(streetId){ // which bus+trip pairs actually detected something on this corridor — the corridor-to-fleet link
-  const byKey={};
+  const byKey={};                  // id must be a real run id so clicking through opens the matching Fleet replay (viewTripReplay looks up tripsForBus by run id)
   issues.filter(i=>i.streetId===streetId).forEach(i=>{
     (i.history||[]).forEach(h=>{
-      const date=h.t.slice(0,10), id=date+'|'+i.ward, key=h.bus+'|'+id;
-      (byKey[key]=byKey[key]||{bus:h.bus,date,id,issueIds:new Set()}).issueIds.add(i.id);
+      const date=h.t.slice(0,10);
+      const run=liveRuns().find(r=>r.bus===h.bus && r.date===date);
+      if(!run) return; // no logged trip to replay for this pass
+      const key=run.id;
+      (byKey[key]=byKey[key]||{bus:run.bus,date:run.date,id:run.id,issueIds:new Set()}).issueIds.add(i.id);
     });
   });
   return Object.values(byKey).map(x=>({bus:x.bus,date:x.date,id:x.id,detections:x.issueIds.size}))
