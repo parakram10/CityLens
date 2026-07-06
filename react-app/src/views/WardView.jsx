@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import Header from '../components/Header.jsx';
 import KpiStrip from '../components/KpiStrip.jsx';
 import QItem from '../components/QItem.jsx';
@@ -10,34 +11,45 @@ import { useSession } from '../context/SessionContext.jsx';
 import { useUI } from '../context/UIContext.jsx';
 import { useStore } from '../lib/useStore.js';
 
-function streetRow(s, go) {
+function StreetRow({ s, onOpen }) {
   return (
-    <tr className="clk" key={s.id} onClick={() => go('street', { street: s.id })}>
+    <tr className="clk" onClick={onOpen}>
       <td><b>{s.name}</b></td><td>{s.open}</td>
       <td><span className="scorepill" style={{ background: s.load > 18 ? '#d32f2f' : s.load > 10 ? '#e56a00' : '#c98a12' }}>{s.load.toFixed(0)}</span></td>
     </tr>
   );
 }
 
-export default function WardView({ state, setState, go }) {
+export default function WardView() {
   useStore();
+  const { wardId } = useParams();
+  const navigate = useNavigate();
   const { session } = useSession();
   const { openIssue, openModal } = useUI();
   const [streetsExpanded, setStreetsExpanded] = useState(false);
+  const [assignFilter, setAssignFilter] = useState('all');
 
-  const w = SCORES[state.ward];
-  const list = issues.filter(i => i.ward === state.ward);
+  const w = SCORES[wardId];
+  if (!w) {
+    return (
+      <>
+        <Header crumb={[{ t: 'Mumbai', to: '/' }, { t: 'Wards', to: '/wards' }, { t: 'Not found' }]} title="Ward not found" sub="" />
+        <div className="content"><div className="card cb"><div className="hint">No ward "{wardId}" — pick one from the Wards list.</div></div></div>
+      </>
+    );
+  }
+  const list = issues.filter(i => i.ward === wardId);
   const open = list.filter(i => OPEN.has(i.status)).sort((a, b) => priority(b) - priority(a));
   const showAssignFilter = session?.role !== 'crew';
   const assignable = open.filter(i => i.type !== 'waterlogging');
   const assignedN = assignable.filter(i => i.crew).length, unassignedN = assignable.length - assignedN;
-  const filter = showAssignFilter ? (state.assignFilter || 'all') : 'all';
+  const filter = showAssignFilter ? assignFilter : 'all';
   const filtered = filter === 'assigned' ? assignable.filter(i => i.crew)
     : filter === 'unassigned' ? assignable.filter(i => !i.crew)
     : open;
   const contractorId = WARD_CREW[w.ward], contractor = contractorId && crewById(contractorId);
   const canManage = session && (session.role === 'admin' || session.role === 'ward_officer');
-  const streets = DATA.streets.filter(s => s.wardId === state.ward).map(s => {
+  const streets = DATA.streets.filter(s => s.wardId === wardId).map(s => {
     const li = issues.filter(i => i.streetId === s.id);
     const sOpen = li.filter(i => OPEN.has(i.status));
     return { ...s, total: li.length, open: sOpen.length, load: sOpen.reduce((a, i) => a + SEVW[i.severity], 0) };
@@ -45,7 +57,7 @@ export default function WardView({ state, setState, go }) {
 
   const crumb = session?.role === 'ward_officer'
     ? [{ t: 'Ward ' + w.ward }]
-    : [{ t: 'Mumbai', go: () => go('city') }, { t: 'Wards', go: () => go('wards') }, { t: 'Ward ' + w.ward }];
+    : [{ t: 'Mumbai', to: '/' }, { t: 'Wards', to: '/wards' }, { t: 'Ward ' + w.ward }];
 
   return (
     <>
@@ -56,7 +68,7 @@ export default function WardView({ state, setState, go }) {
 
         <div className="card">
           <div className="ch"><h3>Ward contractor</h3><span className="r">one crew responsible for every repairable issue in Ward {w.ward}</span></div>
-          <div className="cb" style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '12px 16px' }}>
+          <div className="cb" style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '12px 16px', flexWrap: 'wrap' }}>
             {contractor
               ? <span className="badge assigned">{contractor.name} · {contractor.id}</span>
               : <span className="badge unassigned">No ward contractor</span>}
@@ -77,11 +89,13 @@ export default function WardView({ state, setState, go }) {
 
         <div className="card">
           <div className="ch"><h3>Streets & corridors in Ward {w.ward}</h3><span className="r">click a corridor for its full issue list</span></div>
-          <table>
-            <thead><tr><th>Corridor</th><th>Open</th><th>Load</th></tr></thead>
-            <tbody>{streets.slice(0, 3).map(s => streetRow(s, go))}</tbody>
-            {streetsExpanded && <tbody>{streets.slice(3).map(s => streetRow(s, go))}</tbody>}
-          </table>
+          <div className="tablewrap">
+            <table>
+              <thead><tr><th>Corridor</th><th>Open</th><th>Load</th></tr></thead>
+              <tbody>{streets.slice(0, 3).map(s => <StreetRow key={s.id} s={s} onOpen={() => navigate(`/streets/${s.id}?ward=${wardId}`)} />)}</tbody>
+              {streetsExpanded && <tbody>{streets.slice(3).map(s => <StreetRow key={s.id} s={s} onOpen={() => navigate(`/streets/${s.id}?ward=${wardId}`)} />)}</tbody>}
+            </table>
+          </div>
           {streets.length > 3 && (
             <div style={{ padding: '10px 16px' }}>
               <button className="btn sm" onClick={() => setStreetsExpanded(e => !e)}>
@@ -95,10 +109,10 @@ export default function WardView({ state, setState, go }) {
           <div className="card">
             <div className="ch"><h3>Resolution queue</h3><span className="r">{filtered.length} of {open.length} open · severity × persistence</span></div>
             {showAssignFilter && (
-              <div style={{ display: 'flex', gap: 6, padding: '10px 16px', borderBottom: '1px solid var(--line)' }}>
-                <button className={`btn sm ${filter === 'all' ? 'primary' : ''}`} onClick={() => setState(s => ({ ...s, assignFilter: 'all' }))}>All ({open.length})</button>
-                <button className={`btn sm ${filter === 'assigned' ? 'primary' : ''}`} onClick={() => setState(s => ({ ...s, assignFilter: 'assigned' }))}>Assigned ({assignedN})</button>
-                <button className={`btn sm ${filter === 'unassigned' ? 'primary' : ''}`} onClick={() => setState(s => ({ ...s, assignFilter: 'unassigned' }))}>Unassigned ({unassignedN})</button>
+              <div style={{ display: 'flex', gap: 6, padding: '10px 16px', borderBottom: '1px solid var(--line)', flexWrap: 'wrap' }}>
+                <button className={`btn sm ${filter === 'all' ? 'primary' : ''}`} onClick={() => setAssignFilter('all')}>All ({open.length})</button>
+                <button className={`btn sm ${filter === 'assigned' ? 'primary' : ''}`} onClick={() => setAssignFilter('assigned')}>Assigned ({assignedN})</button>
+                <button className={`btn sm ${filter === 'unassigned' ? 'primary' : ''}`} onClick={() => setAssignFilter('unassigned')}>Unassigned ({unassignedN})</button>
               </div>
             )}
             <div style={{ maxHeight: 452, overflowY: 'auto' }} id="queue">
@@ -110,10 +124,10 @@ export default function WardView({ state, setState, go }) {
           <div className="card">
             <div className="ch"><h3>Ward {w.ward}</h3><span className="r">health {w.score}</span></div>
             <LeafletMap
-              mountKey={'ward-' + state.ward}
+              mountKey={'ward-' + wardId}
               onMount={(L, m) => {
                 tileLayer(L, m);
-                const wl = drawWards(L, m, wardsFC, SCORES, { only: state.ward });
+                const wl = drawWards(L, m, wardsFC, SCORES, { only: wardId });
                 m.fitBounds(wl.getBounds(), { padding: [20, 20] });
                 plot(L, m, list, id => openIssue(id));
               }}

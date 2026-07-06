@@ -59,22 +59,24 @@ function AssignCrewModal({ issueId }) {
       </div>
       <div className="mb" style={{ padding: '6px 0' }}>
         {pool.length ? (
-          <table>
-            <thead><tr><th>Crew ID</th><th>Name</th><th>Load</th><th></th></tr></thead>
-            <tbody>
-              {pool.map(cm => {
-                const open = crewOpenCount(cm.id);
-                const current = i.crew === cm.id;
-                return (
-                  <tr key={cm.id}>
-                    <td>{cm.id}</td><td>{cm.name}</td>
-                    <td><span className="scorepill" style={{ background: open >= CREW_CAPACITY ? '#d32f2f' : open ? '#e56a00' : '#2e7d32' }}>{open}/{CREW_CAPACITY}</span></td>
-                    <td><button className={`btn ${current ? 'good' : 'primary'} sm`} onClick={() => { setIssueCrew(i, cm.id); closeModal(); }}>{current ? 'Assigned ✓' : 'Assign'}</button></td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+          <div className="tablewrap">
+            <table>
+              <thead><tr><th>Crew ID</th><th>Name</th><th>Load</th><th></th></tr></thead>
+              <tbody>
+                {pool.map(cm => {
+                  const open = crewOpenCount(cm.id);
+                  const current = i.crew === cm.id;
+                  return (
+                    <tr key={cm.id}>
+                      <td>{cm.id}</td><td>{cm.name}</td>
+                      <td><span className="scorepill" style={{ background: open >= CREW_CAPACITY ? '#d32f2f' : open ? '#e56a00' : '#2e7d32' }}>{open}/{CREW_CAPACITY}</span></td>
+                      <td><button className={`btn ${current ? 'good' : 'primary'} sm`} onClick={() => { setIssueCrew(i, cm.id); closeModal(); }}>{current ? 'Assigned ✓' : 'Assign'}</button></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         ) : (
           <div className="hint">All {TYPE[i.type].label.toLowerCase()} specialists are at capacity — no one available right now.</div>
         )}
@@ -129,22 +131,24 @@ function AssignWardCrewModal({ ward }) {
         <button className="x" onClick={closeModal}>×</button>
       </div>
       <div className="mb" style={{ padding: '6px 0' }}>
-        <table>
-          <thead><tr><th>Crew ID</th><th>Name</th><th>Specialism</th><th>Open load</th><th></th></tr></thead>
-          <tbody>
-            {CREW.map(cm => {
-              const open = crewOpenCount(cm.id);
-              const current = WARD_CREW[ward] === cm.id;
-              return (
-                <tr key={cm.id}>
-                  <td>{cm.id}</td><td>{cm.name}</td><td>{TYPE[cm.type].label}</td>
-                  <td><span className="scorepill" style={{ background: open >= CREW_CAPACITY ? '#d32f2f' : open ? '#e56a00' : '#2e7d32' }}>{open}/{CREW_CAPACITY}</span></td>
-                  <td><button className={`btn ${current ? 'good' : 'primary'} sm`} onClick={() => { assignWardToCrew(ward, cm.id); closeModal(); }}>{current ? 'Assigned ✓' : 'Assign'}</button></td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+        <div className="tablewrap">
+          <table>
+            <thead><tr><th>Crew ID</th><th>Name</th><th>Specialism</th><th>Open load</th><th></th></tr></thead>
+            <tbody>
+              {CREW.map(cm => {
+                const open = crewOpenCount(cm.id);
+                const current = WARD_CREW[ward] === cm.id;
+                return (
+                  <tr key={cm.id}>
+                    <td>{cm.id}</td><td>{cm.name}</td><td>{TYPE[cm.type].label}</td>
+                    <td><span className="scorepill" style={{ background: open >= CREW_CAPACITY ? '#d32f2f' : open ? '#e56a00' : '#2e7d32' }}>{open}/{CREW_CAPACITY}</span></td>
+                    <td><button className={`btn ${current ? 'good' : 'primary'} sm`} onClick={() => { assignWardToCrew(ward, cm.id); closeModal(); }}>{current ? 'Assigned ✓' : 'Assign'}</button></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </div>
     </>
   );

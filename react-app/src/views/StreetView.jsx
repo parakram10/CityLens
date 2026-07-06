@@ -1,3 +1,4 @@
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import Header from '../components/Header.jsx';
 import QItem from '../components/QItem.jsx';
 import LeafletMap from '../components/LeafletMap.jsx';
@@ -5,26 +6,33 @@ import { TYPE, OPEN, SEVW, issues, priority, fmtDate, wardsFC } from '../lib/mod
 import { DATA } from '../lib/data.js';
 import { tileLayer, plot } from '../lib/maps.js';
 import { tripsForStreet } from '../lib/fleet.js';
+import { wardPath } from '../lib/routes.js';
 import { useUI } from '../context/UIContext.jsx';
 import { useStore } from '../lib/useStore.js';
 
-export default function StreetView({ state, setState, go }) {
+export default function StreetView() {
   useStore();
+  const { streetId } = useParams();
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const { openIssue } = useUI();
-  const scopedWard = state.ward;
+  const scopedWard = searchParams.get('ward');
+
   const allStreets = scopedWard ? DATA.streets.filter(s => s.wardId === scopedWard) : DATA.streets;
   const streets = allStreets.map(s => {
     const li = issues.filter(i => i.streetId === s.id);
     const open = li.filter(i => OPEN.has(i.status));
     return { ...s, total: li.length, open: open.length, load: open.reduce((a, i) => a + SEVW[i.severity], 0) };
   }).sort((a, b) => b.load - a.load);
-  const sel = streets.find(s => s.id === state.street) || streets[0];
+  const sel = streets.find(s => s.id === streetId) || streets[0];
   const list = sel ? issues.filter(i => i.streetId === sel.id) : [];
   const trips = sel ? tripsForStreet(sel.id) : [];
 
   const crumb = scopedWard
-    ? [{ t: 'Mumbai', go: () => go('city') }, { t: 'Ward ' + scopedWard, go: () => go('ward', { ward: scopedWard }) }, { t: 'Streets' }]
-    : [{ t: 'Mumbai', go: () => go('city') }, { t: 'Streets' }];
+    ? [{ t: 'Mumbai', to: '/' }, { t: 'Ward ' + scopedWard, to: wardPath(scopedWard) }, { t: 'Streets' }]
+    : [{ t: 'Mumbai', to: '/' }, { t: 'Streets' }];
+
+  const gotoStreet = id => navigate(`/streets/${id}${scopedWard ? `?ward=${scopedWard}` : ''}`);
 
   if (!sel) {
     return (
@@ -66,17 +74,19 @@ export default function StreetView({ state, setState, go }) {
           <div className="card">
             <div className="ch"><h3>Corridors by open load</h3><span className="r">worst first</span></div>
             <div style={{ maxHeight: 512, overflowY: 'auto' }}>
-              <table>
-                <thead><tr><th>Street</th><th>Ward</th><th>Open</th><th>Load</th></tr></thead>
-                <tbody>
-                  {streets.map(x => (
-                    <tr className={`clk ${x.id === sel.id ? 'sel' : ''}`} key={x.id} onClick={() => setState(s => ({ ...s, street: x.id }))}>
-                      <td><b>{x.name}</b></td><td>{x.wardId}</td><td>{x.open}</td>
-                      <td><span className="scorepill" style={{ background: x.load > 18 ? '#d32f2f' : x.load > 10 ? '#e56a00' : '#c98a12' }}>{x.load.toFixed(0)}</span></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="tablewrap">
+                <table>
+                  <thead><tr><th>Street</th><th>Ward</th><th>Open</th><th>Load</th></tr></thead>
+                  <tbody>
+                    {streets.map(x => (
+                      <tr className={`clk ${x.id === sel.id ? 'sel' : ''}`} key={x.id} onClick={() => gotoStreet(x.id)}>
+                        <td><b>{x.name}</b></td><td>{x.wardId}</td><td>{x.open}</td>
+                        <td><span className="scorepill" style={{ background: x.load > 18 ? '#d32f2f' : x.load > 10 ? '#e56a00' : '#c98a12' }}>{x.load.toFixed(0)}</span></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         </div>
@@ -93,16 +103,18 @@ export default function StreetView({ state, setState, go }) {
         <div className="card">
           <div className="ch"><h3>Fleet coverage</h3><span className="r">buses that have surveyed this corridor — click a trip to replay it</span></div>
           {trips.length ? (
-            <table>
-              <thead><tr><th>Bus</th><th>Trip date</th><th>Detections here</th></tr></thead>
-              <tbody>
-                {trips.map(t => (
-                  <tr className="clk" key={t.id} onClick={() => go('fleet', { bus: t.bus, trip: t.id })}>
-                    <td><b>{t.bus}</b></td><td>{fmtDate(t.date)}</td><td>{t.detections}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="tablewrap">
+              <table>
+                <thead><tr><th>Bus</th><th>Trip date</th><th>Detections here</th></tr></thead>
+                <tbody>
+                  {trips.map(t => (
+                    <tr className="clk" key={t.id} onClick={() => navigate(`/fleet/${t.bus}/${t.id}`)}>
+                      <td><b>{t.bus}</b></td><td>{fmtDate(t.date)}</td><td>{t.detections}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           ) : <div className="hint" style={{ padding: '12px 16px' }}>No fleet passes logged on this corridor yet.</div>}
         </div>
       </div>

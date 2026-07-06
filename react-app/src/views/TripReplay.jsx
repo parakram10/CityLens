@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import L from 'leaflet';
 import Header from '../components/Header.jsx';
 import { DATA } from '../lib/data.js';
@@ -6,14 +7,18 @@ import { TYPE, SEVC, fmtDate } from '../lib/model.js';
 import { tripsForBus, addRouteOverlay } from '../lib/fleet.js';
 import { tileLayer } from '../lib/maps.js';
 import { useUI } from '../context/UIContext.jsx';
+import { useStore } from '../lib/useStore.js';
 
 // Ported from js/app.js viewTripReplay() — real detector output (video + timestamped
 // detections) drives the replay when present; otherwise a simulated timeline built from
 // this bus's actual stops. Kept intentionally imperative (refs + one effect) since the
 // video/map/feed are tightly time-synced, exactly like the original.
-export default function TripReplay({ state, go }) {
+export default function TripReplay() {
+  useStore();
+  const { bus, trip: tripId } = useParams();
+  const navigate = useNavigate();
   const { openIssue } = useUI();
-  const trip = tripsForBus(state.bus).find(t => t.id === state.trip);
+  const trip = tripsForBus(bus).find(t => t.id === tripId);
   const [resetTick, setResetTick] = useState(0);
 
   const mapDivRef = useRef(null);
@@ -170,7 +175,7 @@ export default function TripReplay({ state, go }) {
   }, [trip && trip.id, resetTick]);
 
   useEffect(() => {
-    if (!trip) go('fleet', { bus: null, trip: null });
+    if (!trip) navigate('/fleet', { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [trip]);
 
@@ -181,18 +186,18 @@ export default function TripReplay({ state, go }) {
     <>
       <Header
         crumb={[
-          { t: 'Mumbai', go: () => go('city') },
-          { t: 'Fleet', go: () => go('fleet', { bus: null, trip: null }) },
-          { t: state.bus, go: () => go('fleet', { bus: null, trip: null }) },
+          { t: 'Mumbai', to: '/' },
+          { t: 'Fleet', to: '/fleet' },
+          { t: bus, to: '/fleet' },
           { t: fmtDate(trip.date) },
         ]}
-        title={state.bus}
+        title={bus}
         sub={`Trip on ${fmtDate(trip.date)} — dashcam replay with detections dropping in sync.`}
       />
       <div className="content">
         <div className="row map-side">
           <div className="card">
-            <div className="ch"><h3>Trip replay — {fmtDate(trip.date)}</h3><span className="r">bus {state.bus}</span></div>
+            <div className="ch"><h3>Trip replay — {fmtDate(trip.date)}</h3><span className="r">bus {bus}</span></div>
             <div className="videoslot" key={trip.id + ':' + resetTick}>
               {run && run.video && (
                 <video ref={videoRef} src={`/${run.video}`} muted playsInline style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
@@ -215,23 +220,25 @@ export default function TripReplay({ state, go }) {
             <div className="feed" ref={feedRef}><div className="hint">Press play — confirmed detections along the route appear here as the bus passes them.</div></div>
             <div className="ch" style={{ borderTop: '1px solid var(--line)' }}><h3>Trip stops</h3></div>
             <div style={{ maxHeight: 220, overflowY: 'auto' }}>
-              <table>
-                <thead><tr><th>Issue</th><th>Street</th><th>Sev</th></tr></thead>
-                <tbody>
-                  {trip.stops.map(i => (
-                    <tr className="clk" key={i.id} onClick={() => openIssue(i.id)}>
-                      <td><b>{i.id}</b></td>
-                      <td>
-                        <a style={{ color: 'var(--chalo-d)', textDecoration: 'underline', cursor: 'pointer' }}
-                          onClick={e => { e.stopPropagation(); go('street', { ward: i.ward, street: i.streetId }); }}>
-                          {i.street}
-                        </a>
-                      </td>
-                      <td>{i.severity}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="tablewrap">
+                <table>
+                  <thead><tr><th>Issue</th><th>Street</th><th>Sev</th></tr></thead>
+                  <tbody>
+                    {trip.stops.map(i => (
+                      <tr className="clk" key={i.id} onClick={() => openIssue(i.id)}>
+                        <td><b>{i.id}</b></td>
+                        <td>
+                          <a style={{ color: 'var(--chalo-d)', textDecoration: 'underline', cursor: 'pointer' }}
+                            onClick={e => { e.stopPropagation(); navigate(`/streets/${i.streetId}?ward=${i.ward}`); }}>
+                            {i.street}
+                          </a>
+                        </td>
+                        <td>{i.severity}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         </div>
