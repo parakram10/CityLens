@@ -52,7 +52,9 @@ else
 fi
 
 echo "==> Building js/live.js from $DET"
-python3 "$HERE/build_dashboard_data.py" \
+# Use the detector venv python: build_dashboard_data now reads the source clip (cv2) to draw
+# each issue's own box on its evidence frame; falls back gracefully if cv2 is missing.
+"$PY" "$HERE/build_dashboard_data.py" \
   --detections "$DET" --data "$CITYLENS/js/data.js" --out "$CITYLENS/js/live.js" "${MOTION_ARG[@]}"
 
 echo "==> Done. Open: $CITYLENS/index.html"

@@ -19,6 +19,7 @@ import argparse
 import hashlib
 import json
 import shutil
+import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -142,21 +143,90 @@ def status_for(passes: int) -> str:
     return "confirmed" if passes >= 3 else ("reported" if passes == 2 else "candidate")
 
 
+BOX_STYLE = {   # BGR box colour + display label, keyed by detector issue_type
+    "pothole": ((48, 48, 220), "Pothole"),
+    "garbage": ((60, 168, 72), "Garbage"),
+    "garbage_pile": ((60, 168, 72), "Garbage"),
+    "waterlogging": ((200, 140, 40), "Waterlogging"),
+    "obstruction": ((40, 150, 240), "Obstruction"),
+}
+
+
+def render_boxed_evidence(summary: dict[str, Any], evidence_root: Path) -> dict[str, str]:
+    """Draw each issue's OWN detection box on its full source frame (a single, type-coloured
+    box) and save to <evidence_root>/boxed/<issue_id>.jpg. Returns {issue_id: 'boxed/<id>.jpg'}.
+
+    This is what keeps a pothole pin's evidence from showing the frame's garbage boxes and
+    vice-versa: instead of copying the detector's all-boxes annotated frame, we re-open the
+    SOURCE clip at the detection's own frame and draw just its box. No model inference — the
+    frame index + bbox already live in detections.json. Returns {} (caller falls back to the
+    crop / annotated frame) when cv2 or the source clip isn't available."""
+    try:
+        import cv2  # lazy: the bridge can also run under a python without cv2 installed
+    except ImportError:
+        return {}
+    source = summary.get("source")
+    if not source or not Path(source).exists():
+        return {}
+    # Best (highest-confidence) detection per issue: its frame_index + bbox = the sharpest view.
+    reps: dict[str, dict[str, Any]] = {}
+    for det in summary.get("detections", []):
+        iid = det.get("issue_id")
+        if not iid or det.get("bbox_xyxy") is None or det.get("frame_index") is None:
+            continue
+        if iid not in reps or det.get("confidence_pct", 0) > reps[iid].get("confidence_pct", 0):
+            reps[iid] = det
+    if not reps:
+        return {}
+    out_dir = evidence_root / "boxed"
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return {}
+    cap = cv2.VideoCapture(str(source))
+    result: dict[str, str] = {}
+    try:
+        for iid, det in reps.items():
+            cap.set(cv2.CAP_PROP_POS_FRAMES, int(det["frame_index"]))
+            ok, frame = cap.read()
+            if not ok or frame is None:
+                continue
+            color, label = BOX_STYLE.get(det.get("issue_type", ""),
+                                         ((60, 60, 60), str(det.get("issue_type", "issue")).title()))
+            x1, y1, x2, y2 = (int(v) for v in det["bbox_xyxy"])
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
+            text = f"{label} {round(det.get('confidence_pct', 0))}%"
+            (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+            top = (y1 - th - 10) if (y1 - th - 10) >= 0 else (y2 + 2)   # keep label on-screen
+            cv2.rectangle(frame, (x1, top), (x1 + tw + 8, top + th + 8), color, -1)
+            cv2.putText(frame, text, (x1 + 4, top + th + 4),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            if cv2.imwrite(str(out_dir / f"{iid}.jpg"), frame):
+                result[iid] = f"boxed/{iid}.jpg"
+    finally:
+        cap.release()
+    return result
+
+
 def build_sightings(
     issues: list[dict[str, Any]], emitter: GpsEmitter, video: dict[str, Any],
     buses: list[str], evidence_root: Path | None = None,
+    boxed: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Turn each detected issue into N geolocated pass-sightings (with GPS jitter)."""
     w, h = int(video.get("width", 0)), int(video.get("height", 0))
     now = _parse_now(video)
+    boxed = boxed or {}
     sightings: list[dict[str, Any]] = []
     for issue in issues:
         dtype = dash_type(issue)
         if dtype is None:
             continue
-        # The detector's real evidence for this issue: prefer the annotated frame
-        # (box + label), fall back to the tight crop. Path is relative to the run dir.
-        ev_rel = issue.get("screen_grab_path") or issue.get("crop_path")
+        iid = issue.get("issue_id", "issue")
+        # Evidence for this issue: prefer the full source frame with ONLY this issue's own box
+        # (render_boxed_evidence) so a pothole pin never shows the frame's garbage boxes; fall
+        # back to the tight crop, then the all-boxes annotated frame. Path is run-dir-relative.
+        ev_rel = boxed.get(iid) or issue.get("crop_path") or issue.get("screen_grab_path")
         evsrc = str(evidence_root / ev_rel) if (evidence_root and ev_rel) else None
         # Geolocate at the LAST frame the issue is seen: that's when the object is at
         # the camera (the vehicle drives over/past it), so the pin sits on the real
@@ -165,7 +235,6 @@ def build_sightings(
         base_lat, base_lon, _ = emitter.locate(ts)
         conf = float(issue.get("peak_confidence_pct", 0.0)) / 100.0
         sev = severity_for(conf, issue.get("bbox_xyxy"), w, h)
-        iid = issue.get("issue_id", "issue")
         passes = PASSES_MIN + int(rand01(iid, "passes") * (PASSES_MAX - PASSES_MIN + 1))
         for k in range(passes):
             ang = rand01(iid, k, "ang") * 6.283185
@@ -447,18 +516,43 @@ def build_feed(detector_issues: list[dict[str, Any]], video: dict[str, Any],
 
 
 def link_run_video(evidence_root: Path, run_dir: Path, run_id: str) -> str | None:
-    """Symlink the run's annotated clip into runs/<id>/ (gitignored, local-only). Returns the
-    web path, or None if there's no clip (replay then falls back to the simulated timeline)."""
+    """Publish the run's annotated clip into runs/<id>/ (gitignored, local-only). Returns the
+    web path, or None if there's no clip (replay then falls back to the simulated timeline).
+
+    The detector writes annotated.mp4 via OpenCV's VideoWriter, which produces MPEG-4 Part 2
+    (fourcc FMP4/mp4v) — a codec no browser can decode in a <video> element, so the replay's
+    onerror silently falls back to the simulated timeline. When ffmpeg is available we transcode
+    to H.264 + faststart (moov atom up front) so the clip actually plays; otherwise we symlink
+    the raw clip (won't play in-browser, but keeps the local file addressable)."""
     src = evidence_root / "annotated.mp4"
     if not src.exists():
         return None
+    web_path = f"runs/{run_id}/annotated.mp4"
     try:
         run_dir.mkdir(parents=True, exist_ok=True)
-        link = run_dir / "annotated.mp4"
-        if link.is_symlink() or link.exists():
-            link.unlink()
-        link.symlink_to(src.resolve())
-        return f"runs/{run_id}/annotated.mp4"
+        out = run_dir / "annotated.mp4"
+        if out.is_symlink() or out.exists():
+            out.unlink()
+
+        if shutil.which("ffmpeg"):
+            tmp = run_dir / ".annotated.web.mp4"
+            cmd = [
+                "ffmpeg", "-y", "-loglevel", "error", "-i", str(src.resolve()),
+                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "24",
+                "-preset", "veryfast", "-movflags", "+faststart", "-an", str(tmp),
+            ]
+            try:
+                subprocess.run(cmd, check=True)
+                tmp.replace(out)
+                return web_path
+            except (subprocess.CalledProcessError, OSError) as exc:
+                print(f"  !! ffmpeg transcode failed ({exc}); symlinking raw clip "
+                      f"(won't play in-browser).", flush=True)
+                if tmp.exists():
+                    tmp.unlink()
+
+        out.symlink_to(src.resolve())
+        return web_path
     except OSError:
         return None
 
@@ -487,7 +581,8 @@ def build_run_entry(args: Any, data: dict[str, Any], manifest: dict[str, Any],
 
     detector_issues = summary.get("issues") or summary.get("detections") or []
     evidence_root = Path(args.detections).resolve().parent
-    sightings = build_sightings(detector_issues, emitter, video, buses, evidence_root)
+    boxed = render_boxed_evidence(summary, evidence_root)   # full frame, this-issue's-box-only
+    sightings = build_sightings(detector_issues, emitter, video, buses, evidence_root, boxed)
     for sg in sightings:
         sg["bus"] = bus                              # one run = one bus
     clusters = merge_sightings(sightings)

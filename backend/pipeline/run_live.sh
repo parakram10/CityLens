@@ -28,7 +28,7 @@ PY="python3"
 
 if [ ! -f "$CLIP" ]; then echo "No clip at $CLIP"; exit 1; fi
 
-build(){ python3 "$HERE/build_dashboard_data.py" \
+build(){ "$PY" "$HERE/build_dashboard_data.py" \
   --detections "$DET" --data "$CITYLENS/js/data.js" --out "$CITYLENS/js/live.js" "${MOTION_ARG[@]}"; }
 
 # 1. Motion pacing (once, from the full clip).
