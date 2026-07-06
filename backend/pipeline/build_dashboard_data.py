@@ -235,19 +235,14 @@ def build_sightings(
         base_lat, base_lon, _ = emitter.locate(ts)
         conf = float(issue.get("peak_confidence_pct", 0.0)) / 100.0
         sev = severity_for(conf, issue.get("bbox_xyxy"), w, h)
-        passes = PASSES_MIN + int(rand01(iid, "passes") * (PASSES_MAX - PASSES_MIN + 1))
-        for k in range(passes):
-            ang = rand01(iid, k, "ang") * 6.283185
-            dist = rand01(iid, k, "dist") * GPS_JITTER_M
-            lat, lon = offset_m(base_lat, base_lon, dist * _c(ang), dist * _s(ang))
-            # Newest pass at "now", older passes spaced back in time.
-            t = now - timedelta(days=(passes - 1 - k) * PASS_INTERVAL_DAYS,
-                                hours=rand01(iid, k, "h") * 6)
-            sightings.append({
-                "type": dtype, "lat": lat, "lon": lon, "conf": conf, "sev": sev,
-                "bus": buses[int(rand01(iid, k, "bus") * len(buses))] if buses else ROUTE,
-                "t": t, "video_ts": ts, "evsrc": evsrc,
-            })
+        # One sighting per detected issue: within a single trip a spot is "seen once"
+        # (a cluster of nearby same-type detections still collapses to one pin below).
+        # Cross-trip persistence — the pass counter — is derived later in consolidate_runs()
+        # from how many DISTINCT trips re-detect the same spot, not from a within-trip fan-out.
+        sightings.append({
+            "type": dtype, "lat": base_lat, "lon": base_lon, "conf": conf, "sev": sev,
+            "bus": ROUTE, "t": now, "video_ts": ts, "evsrc": evsrc,
+        })
     return sightings
 
 
@@ -515,16 +510,23 @@ def build_feed(detector_issues: list[dict[str, Any]], video: dict[str, Any],
     return feed
 
 
-def link_run_video(evidence_root: Path, run_dir: Path, run_id: str) -> str | None:
+def link_run_video(evidence_root: Path, run_dir: Path, run_id: str,
+                   source: str | Path | None = None) -> str | None:
     """Publish the run's annotated clip into runs/<id>/ (gitignored, local-only). Returns the
     web path, or None if there's no clip (replay then falls back to the simulated timeline).
 
-    The detector writes annotated.mp4 via OpenCV's VideoWriter, which produces MPEG-4 Part 2
-    (fourcc FMP4/mp4v) — a codec no browser can decode in a <video> element, so the replay's
-    onerror silently falls back to the simulated timeline. When ffmpeg is available we transcode
-    to H.264 + faststart (moov atom up front) so the clip actually plays; otherwise we symlink
-    the raw clip (won't play in-browser, but keeps the local file addressable)."""
+    We publish the detector's annotated.mp4 — detection boxes drawn per frame. The cyan road-ROI
+    trapezium that used to be burned in alongside them is disabled via config (`road_roi.draw:
+    false`); the ROI still gates litter (`enabled: true`), it's just no longer drawn, so the clip
+    reads as clean dashcam + boxes. (`source` is the raw clip, kept only as a last-resort fallback
+    if the annotated frames are missing.)
+
+    OpenCV writes annotated.mp4 as MPEG-4 Part 2 (fourcc FMP4/mp4v) — a codec no browser decodes in
+    a <video>, so we transcode to H.264 + faststart (moov atom up front) via ffmpeg. Without ffmpeg
+    we symlink the raw file (won't play in-browser, but keeps it addressable)."""
     src = evidence_root / "annotated.mp4"
+    if not src.exists() and source and Path(source).exists():
+        src = Path(source)
     if not src.exists():
         return None
     web_path = f"runs/{run_id}/annotated.mp4"
@@ -602,18 +604,58 @@ def build_run_entry(args: Any, data: dict[str, Any], manifest: dict[str, Any],
         "id": run_id, "seq": seq, "label": label, "bus": bus, "date": date,
         "partial": bool(summary.get("partial")),
         "distance_km": round(emitter.traverse_m / 1000.0, 3),
-        "video": link_run_video(evidence_root, run_dir, run_id),
+        "video": link_run_video(evidence_root, run_dir, run_id, summary.get("source")),
         "motion": motion_payload(emitter),
         "feed": build_feed(detector_issues, video, evidence_root, run_dir, run_id),
         "pins": pins,
     }
 
 
+def consolidate_runs(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse same-type pins across ALL runs that sit within MERGE_RADIUS_M into one
+    city issue, and count real cross-trip persistence.
+
+    passes = the number of DISTINCT trips (runs) that independently re-detected the spot.
+    One trip that sees a cluster at a place contributes exactly 1 (whatever within-trip
+    de-dup already happened); the counter only climbs when a *different* trip re-detects
+    the same type at the same location. `runIds` lists every trip that saw it, so the Fleet
+    can still show the issue as a stop on each of those trips. The pass history is rebuilt
+    from the run registry (one row per trip: its date + bus), not from the pins' rows."""
+    run_meta = {r["id"]: {"date": r.get("date", ""), "bus": r.get("bus", ROUTE)} for r in runs}
+    # Feed pins to the same-type / MERGE_RADIUS_M clusterer; `t` is only a stable sort key.
+    pins = [dict(p, t=(p.get("first_seen") or run_meta.get(p.get("runId"), {}).get("date", "")))
+            for r in runs for p in r["pins"]]
+    issues: list[dict[str, Any]] = []
+    for cluster in merge_sightings(pins):
+        members = cluster["members"]
+        rep = max(members, key=lambda m: m.get("confidence", 0.0))   # sharpest sighting anchors the pin
+        run_ids = sorted({m["runId"] for m in members if m.get("runId")},
+                         key=lambda rid: run_meta.get(rid, {}).get("date", ""))
+        issue = {k: v for k, v in rep.items() if k != "t"}
+        issue["runId"] = rep.get("runId")            # keep a singular runId (legacy reads) …
+        issue["runIds"] = run_ids                    # … plus every trip that re-saw the spot
+        issue["passes"] = len(run_ids)
+        issue["status"] = status_for(len(run_ids))
+        issue["severity"] = max(m.get("severity", 1) for m in members)
+        issue["confidence"] = round(max(m.get("confidence", 0.0) for m in members), 2)
+        history = [{"t": f"{run_meta[rid]['date']}T09:00:00Z",
+                    "bus": run_meta[rid]["bus"], "detected": True}
+                   for rid in run_ids if rid in run_meta]
+        issue["history"] = history
+        if history:
+            issue["first_seen"] = history[0]["t"]
+            issue["last_seen"] = history[-1]["t"]
+        issues.append(issue)
+    issues.sort(key=lambda i: i["id"])
+    return issues
+
+
 def regenerate(manifest: dict[str, Any], data: dict[str, Any], out_path: Path,
                root: Path) -> dict[str, Any]:
     """Rebuild js/live.js + js/live.json from every run in the manifest."""
     runs = manifest["runs"]
-    all_pins = [p for r in runs for p in r["pins"]]
+    # Cross-trip de-dup: same spot seen on N trips = one issue with passes=N (not N pins).
+    all_pins = consolidate_runs(runs)
     meta_keys = ("id", "label", "bus", "date", "distance_km", "video", "motion", "feed")
     runs_meta = [{k: r.get(k) for k in meta_keys} for r in runs]
     keep_ids = keep_seed_ids(data.get("issues", []))
