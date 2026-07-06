@@ -346,12 +346,14 @@ function streetRow(s){
 
 function qItem(i,opts={}){
   const el=document.createElement('div'); el.className='qitem';
+  const buses=tripBusesFor(i);
+  const busTxt=buses.length>1?`${buses.length} trips: ${buses.map(busShort).join(', ')}`:(i.bus||buses[0]||'');
   el.innerHTML=`<span class="tdot" style="background:${TYPE[i.type].c}"></span>
     <div class="meta"><div class="t1">${TYPE[i.type].label}
       <span class="sev" style="background:${SEVC[i.severity]}">SEV ${i.severity}</span>
       <span class="badge ${i.status}">${i.status.replace('_',' ')}</span>
       ${(i.type!=='waterlogging'&&getSession()?.role!=='crew')?`<span class="badge ${i.crew?'assigned':'unassigned'}">${i.crew?'Assigned':'Unassigned'}</span>`:''}</div>
-      <div class="t2">${i.street} · ${i.id} · ${i.passes} passes · ${Math.round(i.confidence*100)}% conf · ${i.route} · ${i.bus}</div></div>
+      <div class="t2">${i.street} · ${i.id} · ${i.passes} passes · ${Math.round(i.confidence*100)}% conf · ${i.route} · ${busTxt}</div></div>
     <div class="pri">P ${priority(i).toFixed(1)}</div>`;
   el.onclick=()=>openIssue(i.id,opts); return el;
 }
@@ -594,7 +596,7 @@ function openAddCrew(){
 let replay={timer:null,t:0,seen:new Set()};
 function tripsForBus(busId){ // one detector run assigned to this bus = one trip (manifest-driven)
   return liveRuns().filter(r=>r.bus===busId).map(r=>{
-    const stops=issues.filter(i=>i.runId===r.id);
+    const stops=issues.filter(i=>(i.runIds||[i.runId]).includes(r.id));
     return {id:r.id, date:r.date, label:r.label, run:r, stops,
       wards:[...new Set(stops.map(i=>i.ward))],
       detections:(r.feed||[]).length};
@@ -606,6 +608,16 @@ function tripsForBus(busId){ // one detector run assigned to this bus = one trip
 // DATA.issues (tagged with runId); its feed/motion/video drive that trip's replay.
 function liveRuns(){ return (window.CITYLENS_LIVE && window.CITYLENS_LIVE.runs) || []; }
 function runById(id){ return liveRuns().find(r=>r.id===id) || null; }
+function busShort(b){ return b ? String(b).replace(/^.*-/,'') : ''; }   // "MH01-BST-1423" -> "1423"
+// Every distinct bus/trip that detected this spot — passes is the count of these, so listing
+// them makes "4 passes" visibly "4 trips: 1423, 5106, …" instead of looking single-trip.
+// Falls back to the single bus for seed pins (no runIds).
+function tripBusesFor(i){
+  const ids=(i.runIds&&i.runIds.length)?i.runIds:(i.runId?[i.runId]:[]);
+  const seen=new Set(), out=[];
+  ids.forEach(rid=>{ const r=runById(rid), b=r&&r.bus; if(b&&!seen.has(b)){seen.add(b);out.push(b);} });
+  return out.length?out:(i.bus?[i.bus]:[]);
+}
 
 function viewFleet(){
   if(state.bus && state.trip) return viewTripReplay();
@@ -816,6 +828,7 @@ function openIssue(id,opts){
   document.getElementById('crewModal').classList.remove('on');
   const d=document.getElementById('drawer'), s=document.getElementById('scrim');
   const hist=(i.history&&i.history.length)?i.history:[{t:i.first_seen,bus:i.bus,detected:true},{t:i.last_seen,bus:i.bus,detected:i.status!=='verified_fixed'}];
+  const buses=tripBusesFor(i);            // every trip/bus that detected this spot (passes = count of these)
   d.innerHTML=`<div class="dh"><span class="tdot" style="background:${TYPE[i.type].c};width:14px;height:14px"></span>
       <div><b style="font-size:15px">${TYPE[i.type].label}</b>
       <div style="font-size:12px;color:var(--faint)">${i.id} · Ward ${i.ward}</div></div>
@@ -830,9 +843,9 @@ function openIssue(id,opts){
       <dl class="dl">
         <dt>Location</dt><dd>${i.street}, Ward ${i.ward}</dd>
         <dt>GPS</dt><dd>${i.lat.toFixed(5)}, ${i.lon.toFixed(5)}</dd>
-        <dt>Route / bus</dt><dd>${i.route} · ${i.bus}</dd>
+        <dt>Route / ${buses.length>1?'buses':'bus'}</dt><dd>${i.route} · ${buses.length>1?buses.join(', '):i.bus}</dd>
         <dt>First seen</dt><dd>${fmtDT(i.first_seen)}</dd>
-        <dt>Independent passes</dt><dd>${i.passes} ${i.passes>=3?'✓ confirmed':'· awaiting gate'}</dd>
+        <dt>Independent passes</dt><dd>${i.passes}${buses.length>1?` · ${buses.length} trips (${buses.map(busShort).join(', ')})`:''} ${i.passes>=3?'✓ confirmed':(i.passes===2?'· reported':'· awaiting gate')}</dd>
         ${i.type!=='waterlogging'?`<dt>Assigned crew</dt><dd>${i.crew? crewById(i.crew).name+' · '+i.crew : 'Unassigned · backlog'}</dd>`:''}
       </dl>
       ${crewPerformanceNote(i)}
