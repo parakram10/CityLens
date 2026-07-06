@@ -188,7 +188,9 @@ road_roi:
   apply_to_issue_groups:
     - waste_litter
   test_point: bottom_center
-  draw: true
+  # ROI still gates litter (enabled: true above); this only hides the cyan outline
+  # in the annotated video — the replay reads as clean dashcam + detection boxes.
+  draw: false
 
 annotation:
   box_thickness: 2
