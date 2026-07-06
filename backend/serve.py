@@ -6,7 +6,12 @@ Python's stock ``http.server`` has no HTTP Range support, so large per-run
 <video> element — the browser aborts with a BrokenPipe. This handler adds
 ``Range`` / ``206 Partial Content`` so the annotated dashcam clips play back.
 
-Serves the repo root (one level up from backend/).
+Serves the repo root (one level up from backend/), with the built React app
+(react-app/dist, run ``npm run build`` in react-app/ first) as the frontend:
+  - "/", "/login" and other app routes -> react-app/dist/index.html
+  - "/_assets/*"                       -> react-app/dist/_assets/* (JS/CSS bundle)
+  - "/assets/*", "/runs/*", "/live.json" and everything else -> real repo files,
+    unchanged, so the video clips/evidence photos aren't duplicated into dist.
 
 Usage:  python3 backend/serve.py [port]      # default 5174
 """
@@ -16,6 +21,8 @@ import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # repo root
+REACT_DIST = os.path.join(ROOT, "react-app", "dist")
+APP_ROUTES = {"/", "/index.html", "/login", "/login.html"}
 BUFSIZE = 256 * 1024
 
 
@@ -28,6 +35,28 @@ class RangeHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Cache-Control", "no-cache")
         super().end_headers()
+
+    def translate_path(self, path):
+        clean = path.split("?", 1)[0].split("#", 1)[0]
+
+        if clean == "/live.json":
+            return os.path.join(ROOT, "js", "live.json")
+
+        if clean.startswith("/_assets/"):
+            candidate = os.path.join(REACT_DIST, clean.lstrip("/"))
+            if os.path.isfile(candidate):
+                return candidate
+
+        if clean in APP_ROUTES:
+            dist_index = os.path.join(REACT_DIST, "index.html")
+            if os.path.isfile(dist_index):
+                return dist_index
+            self.log_error(
+                "react-app/dist missing — run `npm run build` in react-app/ "
+                "first; falling back to the legacy static page"
+            )
+
+        return super().translate_path(path)
 
     def send_head(self):
         self._range_remaining = None
